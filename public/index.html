@@ -68,8 +68,7 @@
   </div>
 
 <script>
-  const API_NOW = "/now-playing";
-  const API_REC = "/recent";
+  const API_DECK = "/deck"; // en samlad endpoint
 
   const el = {
     cardLink:document.getElementById("cardLink"),
@@ -79,9 +78,7 @@
     recent:document.getElementById("recent")
   };
 
-  let nowData = null;
-  let recentCache = [];     // senaste visade (för fallback)
-  let lastRecentKey = "";   // undvik onödig DOM
+  let lastRecentKey = "";
 
   const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
 
@@ -109,8 +106,8 @@
   }
   const setAccent=(c)=>document.documentElement.style.setProperty("--accent",c);
 
-  function paintNow(d){
-    if(!d||!d.playing){
+  function renderNow(now){
+    if(!now || !now.playing){
       el.content.hidden = true;
       el.empty.hidden = false;
       el.bg.style.backgroundImage = "";
@@ -120,23 +117,26 @@
     el.content.hidden = false;
     el.empty.hidden = true;
 
-    el.title.textContent = d.title || "Okänd låt";
-    el.artist.textContent = (d.artists||[]).join(", ") || d.album || "";
-    const p = d.progress_ms || 0, t = d.duration_ms || 1;
+    el.title.textContent = now.title || "Okänd låt";
+    el.artist.textContent = (now.artists||[]).join(", ") || now.album || "";
+    const p = now.progress_ms || 0, t = now.duration_ms || 1;
     el.tStart.textContent = ms(p); el.tEnd.textContent = ms(t);
     el.bar.style.width = (100*p/t) + "%";
 
-    if (d.image) {
-      el.cover.src = d.image;
-      el.bg.style.backgroundImage = `url("${d.image}")`;
-      dominantColorFromURL(d.image).then(setAccent);
+    if (now.image) {
+      el.cover.src = now.image;
+      el.bg.style.backgroundImage = `url("${now.image}")`;
+      dominantColorFromURL(now.image).then(setAccent);
     }
-    el.cardLink.href = d.url || "#";
+    el.cardLink.href = now.url || "#";
   }
 
-  function keyFor(list){ return list.map(it => it.id).join("|"); }
+  function keyFor(list){ return list.map(it => it.id + "@" + (it.played_at || "")).join("|"); }
 
   function renderRecent(list){
+    const key = keyFor(list.slice(0,3));
+    if (key === lastRecentKey) return; // undvik blink
+
     el.recent.innerHTML = "";
     const three = list.slice(0,3);
     for(const it of three){
@@ -160,69 +160,21 @@
       ph.style.visibility = "hidden";
       el.recent.appendChild(ph);
     }
+    lastRecentKey = key;
   }
 
-  async function pollNow(){
+  async function pollDeck(){
     try {
-      const r = await fetch(API_NOW, { cache:"no-store" });
-      const json = await r.json();
-      nowData = json;
-      paintNow(json);
+      const r = await fetch(API_DECK, { cache:"no-store" });
+      const data = await r.json();
+      renderNow(data.now || { playing:false });
+      renderRecent(Array.isArray(data.recent) ? data.recent : []);
     } catch {}
   }
 
-  // Backoff-variabel för /recent om Spotify throttlar
-  let recentBackoffMs = 0;
-
-  async function pollRecent(){
-    try {
-      if (recentBackoffMs > 0) return; // tillfälligt pausad
-      const r = await fetch(API_REC, { cache:"no-store" });
-      const data = await r.json();
-
-      // om servern signalerar throttling fel → backoff lite
-      if (data && (data.error === "spotify_429" || data.error === "server_error")) {
-        recentBackoffMs = 3000; // 3s paus
-        setTimeout(() => recentBackoffMs = 0, recentBackoffMs);
-      }
-
-      let list = Array.isArray(data.items) ? data.items : [];
-      const nowId = nowData?.id || null;
-      if (nowId) list = list.filter(it => it.id !== nowId);
-
-      // fyll upp till 3 med cache om nödvändigt
-      if (list.length < 3 && recentCache.length) {
-        const ids = new Set(list.map(x => x.id));
-        for (const it of recentCache) {
-          if (list.length >= 3) break;
-          if (!ids.has(it.id) && it.id !== nowId) list.push(it);
-        }
-      }
-
-      list = list.slice(0,3);
-      if (list.length) recentCache = list;
-
-      const key = keyFor(list);
-      if (key !== lastRecentKey) {
-        renderRecent(list);
-        lastRecentKey = key;
-      }
-    } catch {
-      // fallback till cache så UI inte “dör”
-      if (recentCache.length) {
-        const key = keyFor(recentCache);
-        if (key !== lastRecentKey) {
-          renderRecent(recentCache);
-          lastRecentKey = key;
-        }
-      }
-    }
-  }
-
-  // 1 Hz polling
-  setInterval(pollNow, 1000);
-  setInterval(pollRecent, 1000);
-  pollNow(); pollRecent();
+  // en enda poll per sekund – servern gör resten
+  setInterval(pollDeck, 1000);
+  pollDeck();
 </script>
 </body>
 </html>
