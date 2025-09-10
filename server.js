@@ -1,3 +1,4 @@
+// server.js
 import express from "express";
 import fetch from "node-fetch";
 import dotenv from "dotenv";
@@ -22,13 +23,34 @@ const {
   TWITCH_USERNAME,
   TWITCH_OAUTH_TOKEN,
   TWITCH_CHANNEL,
-  ADMIN_SECRET // valfritt: för /admin/set-refresh
+  ADMIN_SECRET // för /admin/set-refresh
 } = process.env;
 
-/* ---------------- Helpers ---------------- */
+/* ---------------- Helpers & state ---------------- */
 const TOKEN_FILE = path.join(process.cwd(), "refresh_token.json");
-const getState = () => crypto.randomBytes(16).toString("hex");
+const toMs = (iso) => new Date(iso).getTime() || 0;
+const noStore = (res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  res.set("Pragma", "no-cache");
+};
 
+/* ---- Server-side OAuth state (cookie-fritt) ---- */
+const pendingStates = new Map(); // state -> expiresAt (ms)
+const STATE_TTL_MS = 10 * 60 * 1000;
+function newState() { return crypto.randomBytes(16).toString("hex"); }
+function addState(st) { pendingStates.set(st, Date.now() + STATE_TTL_MS); }
+function consumeState(st) {
+  const exp = pendingStates.get(st);
+  if (!exp) return false;
+  pendingStates.delete(st);
+  return exp > Date.now();
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, exp] of pendingStates.entries()) if (exp <= now) pendingStates.delete(k);
+}, 60_000);
+
+/* ---- Refresh token hantering ---- */
 let OVERRIDE_REFRESH = null; // kan sättas via /admin/set-refresh
 const loadRefresh = () => {
   if (OVERRIDE_REFRESH) return OVERRIDE_REFRESH;
@@ -36,60 +58,85 @@ const loadRefresh = () => {
   try { return JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8")).refresh_token; } catch { return null; }
 };
 
-const noStore = (res) => {
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-  res.set("Pragma", "no-cache");
-};
-const toMs = (iso) => new Date(iso).getTime() || 0;
-
-/* ---------------- OAuth ---------------- */
+/* ---------------- Spotify OAuth (cookie-fritt) ---------------- */
 app.get("/login", (req, res) => {
   const scopes = [
     "user-read-currently-playing",
     "user-read-playback-state",
     "user-read-recently-played"
   ].join(" ");
-  const state = getState();
-  res.cookie("spotify_auth_state", state, { httpOnly: true, sameSite: "lax" });
-  const p = new URLSearchParams({
+
+  const state = newState();
+  addState(state);
+
+  const params = new URLSearchParams({
     response_type: "code",
     client_id: SPOTIFY_CLIENT_ID,
     scope: scopes,
     redirect_uri: SPOTIFY_REDIRECT_URI,
     state
   });
-  res.redirect("https://accounts.spotify.com/authorize?" + p.toString());
+  res.redirect("https://accounts.spotify.com/authorize?" + params.toString());
 });
 
 app.get("/callback", async (req, res) => {
-  const { code, state } = req.query;
-  const stored = req.cookies.spotify_auth_state;
-  if (!state || state !== stored) return res.status(400).send("State mismatch");
-  res.clearCookie("spotify_auth_state");
+  const { code, state, error } = req.query;
 
-  const body = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: SPOTIFY_REDIRECT_URI });
-  const auth = "Basic " + Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString("base64");
+  if (error) {
+    res.status(400).send(`<pre>Spotify error: ${String(error)}</pre>`);
+    return;
+  }
+  if (!state || !consumeState(state)) {
+    res.status(400).send(`<pre>State mismatch/expired. Prova igen från /login.</pre>`);
+    return;
+  }
+  if (!code) {
+    res.status(400).send(`<pre>Missing code</pre>`);
+    return;
+  }
 
-  const r = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST", headers: { Authorization: auth, "Content-Type": "application/x-www-form-urlencoded" }, body
-  });
-  const data = await r.json();
-  if (!r.ok) return res.status(400).send("Token error: " + JSON.stringify(data));
+  try {
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: SPOTIFY_REDIRECT_URI
+    });
+    const auth = "Basic " + Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString("base64");
 
-  const rt = data.refresh_token;
-  if (rt) {
+    const r = await fetch("https://accounts.spotify.com/api/token", {
+      method: "POST",
+      headers: { Authorization: auth, "Content-Type": "application/x-www-form-urlencoded" },
+      body
+    });
+
+    const text = await r.text();
+    let data = null; try { data = JSON.parse(text); } catch {}
+    if (!r.ok || !data) {
+      res.status(400).send(`<h3>Token error</h3><pre>${text.slice(0,1000)}</pre>`);
+      return;
+    }
+
+    const rt = data.refresh_token;
+    if (!rt) {
+      res.status(400).send(`<h3>Ingen refresh_token i svaret</h3><pre>${text.slice(0,1000)}</pre>`);
+      return;
+    }
+
     try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ refresh_token: rt }, null, 2)); } catch {}
-    return res.send(`
+    res.send(`
       <style>body{font-family:system-ui;padding:24px}</style>
       <h2>Klart!</h2>
-      <p>Kopiera refresh token här nedan och lägg den som <code>REFRESH_TOKEN</code> i Render (eller använd <code>/admin/set-refresh</code>).</p>
-      <pre style="background:#111;color:#0f0;padding:12px;border-radius:8px">${rt}</pre>
+      <p>Kopiera din <b>refresh token</b> och lägg den som <code>REFRESH_TOKEN</code> i Render
+         (eller använd <code>/admin/set-refresh</code> om du har ADMIN_SECRET).</p>
+      <pre style="background:#111;color:#0f0;padding:12px;border-radius:8px;white-space:break-spaces">${rt}</pre>
+      <p>Tips: testa <a href="/whoami" target="_blank">/whoami</a> efter att du satt tokenen.</p>
     `);
+  } catch (e) {
+    res.status(500).send(`<h3>Exception</h3><pre>${String(e)}</pre>`);
   }
-  res.redirect("/");
 });
 
-/* ---------------- Spotify Access Token ---------------- */
+/* ---------------- Spotify Access Token via refresh ---------------- */
 async function getAccessToken() {
   const refresh_token = loadRefresh();
   if (!refresh_token) return null;
@@ -106,7 +153,7 @@ async function getAccessToken() {
 }
 
 /* ==========================================================
-   STATE: now + optimistic bridge + history buffer + snapshot
+   STATE: now + snapshot + optimistic bridge + history buffer
    ========================================================== */
 let lastNow = { playing: false };
 
@@ -327,12 +374,44 @@ app.get("/whoami", async (_req, res) => {
   try {
     const at = await getAccessToken();
     if (!at) return res.status(400).json({ ok:false, error:"no_access_token" });
-    const r = await fetch("https://api.spotify.com/v1/me", { headers: { Authorization: `Bearer ${at}` } });
-    const me = await r.json();
-    if (!r.ok) return res.status(r.status).json({ ok:false, error: me });
-    res.json({ ok:true, id: me.id, display_name: me.display_name, product: me.product, country: me.country });
+
+    const r = await fetch("https://api.spotify.com/v1/me", {
+      headers: { Authorization: `Bearer ${at}` }
+    });
+
+    const ct = r.headers.get("content-type") || "";
+    const bodyText = await r.text();
+    let bodyJson = null;
+    try { bodyJson = JSON.parse(bodyText); } catch {}
+
+    if (!r.ok) {
+      return res.status(r.status).json({
+        ok:false,
+        status:r.status,
+        content_type: ct,
+        error: bodyJson || bodyText.slice(0,200)
+      });
+    }
+
+    if (bodyJson) {
+      return res.json({
+        ok:true,
+        id: bodyJson.id,
+        display_name: bodyJson.display_name,
+        product: bodyJson.product,
+        country: bodyJson.country
+      });
+    } else {
+      return res.json({
+        ok:false,
+        status:r.status,
+        content_type: ct,
+        error: "non_json_response",
+        snippet: bodyText.slice(0,200)
+      });
+    }
   } catch (e) {
-    res.status(500).json({ ok:false, error:e.message });
+    return res.status(500).json({ ok:false, error:String(e) });
   }
 });
 
