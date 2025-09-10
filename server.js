@@ -15,7 +15,7 @@ const {
   SPOTIFY_CLIENT_ID,
   SPOTIFY_CLIENT_SECRET,
   SPOTIFY_REDIRECT_URI,
-  REFRESH_TOKEN,                 // <-- sätts i Render efter första inloggningen
+  REFRESH_TOKEN,
   PORT = process.env.PORT || 3000
 } = process.env;
 
@@ -23,16 +23,18 @@ const TOKEN_FILE = path.join(process.cwd(), "refresh_token.json");
 
 // helpers
 const getState = () => crypto.randomBytes(16).toString("hex");
-const saveLocalRefresh = (rt) => {
-  try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ refresh_token: rt }, null, 2)); } catch {}
-};
+const saveLocalRefresh = (rt) => { try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ refresh_token: rt }, null, 2)); } catch {} };
 const loadRefresh = () => {
   if (process.env.REFRESH_TOKEN) return process.env.REFRESH_TOKEN;
   try { return JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8")).refresh_token; } catch { return null; }
 };
 
 app.get("/login", (req, res) => {
-  const scopes = ["user-read-currently-playing", "user-read-playback-state"].join(" ");
+  const scopes = [
+    "user-read-currently-playing",
+    "user-read-playback-state",
+    "user-read-recently-played"
+  ].join(" ");
   const state = getState();
   res.cookie("spotify_auth_state", state, { httpOnly: true, sameSite: "lax" });
   const p = new URLSearchParams({
@@ -64,15 +66,14 @@ app.get("/callback", async (req, res) => {
 
   const rt = data.refresh_token;
   if (rt) {
-    // lokalt skriver vi till fil (enkelt), på Render vill vi lägga den i en ENV
     saveLocalRefresh(rt);
     console.log("\n=== COPY THIS REFRESH TOKEN TO Render ENV (REFRESH_TOKEN) ===\n", rt, "\n");
     return res.send(`
       <style>body{font-family:system-ui;padding:24px}</style>
       <h2>Klart!</h2>
-      <p>Kopiera din <b>refresh token</b> och lägg den som miljövariabel <code>REFRESH_TOKEN</code> i Render:</p>
+      <p>Kopiera din <b>refresh token</b> och lägg den som miljövariabel <code>REFRESH_TOKEN</code> i Render.</p>
       <pre style="background:#111;color:#0f0;padding:12px;border-radius:8px;white-space:break-spaces">${rt}</pre>
-      <p>När den är sparad: <b>Redeploy</b>. Du kan stänga den här fliken.</p>
+      <p>När den är sparad: <b>Redeploy</b>.</p>
     `);
   }
   res.redirect("/");
@@ -117,6 +118,7 @@ app.get("/now-playing", async (_req, res) => {
     res.json({
       playing: true,
       type: isEpisode ? "episode" : "track",
+      id: item.id || "",
       title: item.name || "",
       artists: isEpisode ? (item.show?.publisher ? [item.show.publisher] : []) : (item.artists?.map(a => a.name) || []),
       album: isEpisode ? (item.show?.name || "") : (item.album?.name || ""),
@@ -127,6 +129,42 @@ app.get("/now-playing", async (_req, res) => {
     });
   } catch (e) {
     res.json({ playing: false, error: e.message });
+  }
+});
+
+// NYTT: senaste 3
+app.get("/recent", async (_req, res) => {
+  try {
+    const at = await getAccessToken();
+    if (!at) return res.json({ items: [] });
+
+    // Hämta 10 och plocka ut 3 unika spår
+    const r = await fetch("https://api.spotify.com/v1/me/player/recently-played?limit=10", {
+      headers: { Authorization: `Bearer ${at}` }
+    });
+    if (!r.ok) return res.json({ items: [] });
+    const json = await r.json();
+
+    const seen = new Set();
+    const out = [];
+    for (const it of json.items || []) {
+      const track = it.track;
+      if (!track) continue;
+      if (seen.has(track.id)) continue;
+      seen.add(track.id);
+      out.push({
+        id: track.id,
+        title: track.name || "",
+        artists: track.artists?.map(a => a.name) || [],
+        image: track.album?.images?.[0]?.url || "",
+        url: track.external_urls?.spotify || ""
+      });
+      if (out.length >= 3) break;
+    }
+
+    res.json({ items: out });
+  } catch (e) {
+    res.json({ items: [] });
   }
 });
 
