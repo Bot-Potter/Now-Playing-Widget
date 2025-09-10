@@ -69,7 +69,7 @@
 
 <script>
   const API_NOW = "/now-playing";
-  const API_REC = "/recent"; // vi skickar exclude_id
+  const API_REC = "/recent";
 
   const el = {
     cardLink:document.getElementById("cardLink"),
@@ -78,10 +78,6 @@
     tStart:document.getElementById("tStart"), tEnd:document.getElementById("tEnd"), bar:document.getElementById("bar"),
     recent:document.getElementById("recent")
   };
-
-  // ---- Debug-globals (för DevTools) ----
-  window.__now = null;
-  window.__recent = [];
 
   let now = null;
   let last3Key = ""; // "id1|id2|id3" – rendera endast när sekvensen ändras
@@ -138,10 +134,9 @@
   }
 
   function renderRecent(list){
-    // list = exakt topp 3 från server (redan dedup och exkluderad now-playing)
     const ids = list.map(x => x.id || "-");
     const key = ids.join("|");
-    if (key === last3Key) return; // inget nytt → undvik blink
+    if (key === last3Key) return;
 
     el.recent.innerHTML = "";
     const three = list.slice(0,3);
@@ -166,11 +161,7 @@
       ph.style.visibility = "hidden";
       el.recent.appendChild(ph);
     }
-
     last3Key = key;
-    // debug
-    window.__recent = three;
-    console.debug("[recent]", three.map(x => `${x.title} (${x.id})`));
   }
 
   async function pollNow(){
@@ -178,8 +169,6 @@
       const r = await fetch(API_NOW, { cache:"no-store" });
       const data = await r.json();
       now = data;
-      window.__now = now; // debug
-      console.debug("[now]", now?.title, now?.id);
       paintNow(now);
     } catch {}
   }
@@ -194,7 +183,7 @@
     } catch {}
   }
 
-  setInterval(pollNow, 1000);   // minst 1 Hz
+  setInterval(pollNow, 1000);
   setInterval(pollRecent, 1000);
   pollNow(); pollRecent();
 </script>
