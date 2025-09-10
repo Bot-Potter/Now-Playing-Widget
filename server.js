@@ -6,6 +6,8 @@ import path from "path";
 import fs from "fs";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
+import tmi from "tmi.js";
+
 dotenv.config();
 
 const app = express();
@@ -16,7 +18,10 @@ const {
   SPOTIFY_CLIENT_ID,
   SPOTIFY_CLIENT_SECRET,
   SPOTIFY_REDIRECT_URI,
-  PORT = process.env.PORT || 3000
+  PORT = process.env.PORT || 3000,
+  TWITCH_USERNAME,
+  TWITCH_OAUTH_TOKEN,
+  TWITCH_CHANNEL
 } = process.env;
 
 const TOKEN_FILE = path.join(process.cwd(), "refresh_token.json");
@@ -69,13 +74,7 @@ app.get("/callback", async (req, res) => {
   if (rt) {
     saveLocalRefresh(rt);
     console.log("\n=== COPY THIS REFRESH TOKEN TO Render ENV (REFRESH_TOKEN) ===\n", rt, "\n");
-    return res.send(`
-      <style>body{font-family:system-ui;padding:24px}</style>
-      <h2>Klart!</h2>
-      <p>Kopiera din <b>refresh token</b> och lägg den som miljövariabel <code>REFRESH_TOKEN</code> i Render.</p>
-      <pre style="background:#111;color:#0f0;padding:12px;border-radius:8px;white-space:break-spaces">${rt}</pre>
-      <p>Spara & redeploya, sen kan du stänga denna flik.</p>
-    `);
+    return res.send(`<h2>Klart!</h2><p>Lägg in refresh token som REFRESH_TOKEN i Render och redeploya.</p><pre>${rt}</pre>`);
   }
   res.redirect("/");
 });
@@ -98,11 +97,11 @@ async function getAccessToken() {
    STATE: now + optimistic bridge + history buffer
    ========================================================== */
 let lastNow = { playing: false };
-let optimisticQueue = [];                // {id,title,artists[],image,url,played_at}
-const OPTIMISTIC_TTL_MS = 30_000;
+let optimisticQueue = [];
+const OPTIMISTIC_TTL_MS = 30000;
 
-let historyBuffer = [];                  // newest-first; unique by id@played_at
-let lastSpotifyCursorMs = 0;             // max played_at (ms) vi har från Spotify
+let historyBuffer = [];
+let lastSpotifyCursorMs = 0;
 const HISTORY_MAX = 50;
 
 function pushOptimisticFromNow(nowObj) {
@@ -119,7 +118,7 @@ function pushOptimisticFromNow(nowObj) {
   const nowTs = Date.now();
   optimisticQueue = optimisticQueue.filter(x => {
     const fresh = (nowTs - toMs(x.played_at)) < OPTIMISTIC_TTL_MS;
-    const key = x.id; // dubblett på track-id
+    const key = x.id;
     if (seen.has(key)) return false;
     seen.add(key);
     return fresh;
@@ -127,14 +126,10 @@ function pushOptimisticFromNow(nowObj) {
 }
 
 function addToHistoryFromApi(items) {
-  // items: array of PlayHistory normalized {id,title,artists[],image,url,played_at}
-  // sortera desc by played_at
   items.sort((a,b) => toMs(b.played_at) - toMs(a.played_at));
-
   const next = [...items, ...historyBuffer];
   const seenKey = new Set();
   const out = [];
-
   for (const it of next) {
     const key = `${it.id}@${it.played_at}`;
     if (seenKey.has(key)) continue;
@@ -142,39 +137,35 @@ function addToHistoryFromApi(items) {
     out.push(it);
     if (out.length >= HISTORY_MAX) break;
   }
-
   historyBuffer = out.sort((a,b) => toMs(b.played_at) - toMs(a.played_at));
   const topPlayedAtMs = historyBuffer.length ? toMs(historyBuffer[0].played_at) : 0;
   if (topPlayedAtMs > lastSpotifyCursorMs) lastSpotifyCursorMs = topPlayedAtMs;
 }
 
-/* ---------- /now-playing (1 Hz från fronten) ---------- */
+/* ---------- /now-playing ---------- */
 app.get("/now-playing", async (_req, res) => {
   noStore(res);
   try {
     const at = await getAccessToken();
-    if (!at) { lastNow = { playing:false }; return res.json({ playing:false, message:"Ingen användare kopplad än." }); }
-
-    const r = await fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track,episode", {
+    if (!at) { lastNow = { playing:false }; return res.json({ playing:false }); }
+    const r = await fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track", {
       headers: { Authorization: `Bearer ${at}` }
     });
-
     if (r.status === 204) { lastNow = { playing:false }; return res.json({ playing:false }); }
-    if (!r.ok)          { lastNow = { playing:false }; return res.json({ playing:false }); }
+    if (!r.ok) { lastNow = { playing:false }; return res.json({ playing:false }); }
 
     const json = await r.json();
     if (!json?.is_playing) { lastNow = { playing:false }; return res.json({ playing:false }); }
 
-    const isEpisode = json.currently_playing_type === "episode";
     const item = json.item || {};
-    const img = (isEpisode ? item.images : item.album?.images)?.[0]?.url || "";
+    const img = item.album?.images?.[0]?.url || "";
     const payload = {
       playing: true,
-      type: isEpisode ? "episode" : "track",      // NOTE: “recently-played” stöder inte episodes, bara tracks. :contentReference[oaicite:2]{index=2}
+      type: "track",
       id: item.id || "",
       title: item.name || "",
-      artists: isEpisode ? (item.show?.publisher ? [item.show.publisher] : []) : (item.artists?.map(a => a.name) || []),
-      album: isEpisode ? (item.show?.name || "") : (item.album?.name || ""),
+      artists: (item.artists||[]).map(a=>a.name),
+      album: item.album?.name || "",
       url: item.external_urls?.spotify || "",
       image: img,
       progress_ms: json.progress_ms || 0,
@@ -182,7 +173,6 @@ app.get("/now-playing", async (_req, res) => {
     };
 
     if (lastNow?.playing && lastNow?.id && lastNow.id !== payload.id) {
-      // ny låt → lägg förra i optimistic bridge
       pushOptimisticFromNow(lastNow);
     }
     lastNow = payload;
@@ -193,83 +183,91 @@ app.get("/now-playing", async (_req, res) => {
   }
 });
 
-/* ---------- /recent (1 Hz från fronten; server hämtar smart) ---------- */
-const RECENT_FETCH_MIN_MS = 1200; // min tid mellan Spotify-anrop
+/* ---------- /recent ---------- */
+const RECENT_FETCH_MIN_MS = 1200;
 let lastRecentFetchTs = 0;
 
 async function fetchSpotifyRecent(afterMs) {
   const at = await getAccessToken();
   if (!at) return null;
-
   const url = new URL("https://api.spotify.com/v1/me/player/recently-played");
-  url.searchParams.set("limit", "50");
-  if (afterMs && Number.isFinite(afterMs) && afterMs > 0) {
-    // after = Unix timestamp i ms, exklusiv. :contentReference[oaicite:3]{index=3}
-    url.searchParams.set("after", String(afterMs));
-  }
-
-  const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${at}` } });
+  url.searchParams.set("limit","50");
+  if (afterMs && Number.isFinite(afterMs) && afterMs>0) url.searchParams.set("after", String(afterMs));
+  const r = await fetch(url.toString(), { headers:{Authorization:`Bearer ${at}`} });
   if (!r.ok) return null;
   const json = await r.json();
-
-  const normalized = (json.items || [])
-    .filter(x => x && x.track && x.track.id && x.played_at)
-    .map(it => ({
+  const normalized = (json.items||[])
+    .filter(x => x.track && x.track.id && x.played_at)
+    .map(it=>({
       id: it.track.id,
-      title: it.track.name || "",
-      artists: (it.track.artists || []).map(a => a.name),
+      title: it.track.name,
+      artists: it.track.artists.map(a=>a.name),
       image: it.track.album?.images?.[0]?.url || "",
       url: it.track.external_urls?.spotify || "",
       played_at: it.played_at
     }));
-
-  return { normalized, cursors: json.cursors || {} };
+  return normalized;
 }
 
 app.get("/recent", async (req, res) => {
   noStore(res);
-  const excludeId = (req.query.exclude_id || "").trim() || null;
-
+  const excludeId = (req.query.exclude_id||"").trim()||null;
   try {
     const now = Date.now();
-    // throttla Spotify – men svara alltid från vår lokala state
     if (now - lastRecentFetchTs >= RECENT_FETCH_MIN_MS) {
       lastRecentFetchTs = now;
-      // hämta bara NYTT med after=<senaste Spotify played_at>
-      const after = lastSpotifyCursorMs || 0;
-      const pack = await fetchSpotifyRecent(after);
-      if (pack) {
-        addToHistoryFromApi(pack.normalized);
-        // Om Spotify gav en cursor “after” framåt, uppdaterar addToHistoryFromApi redan lastSpotifyCursorMs
-      }
+      const pack = await fetchSpotifyRecent(lastSpotifyCursorMs);
+      if (pack) addToHistoryFromApi(pack);
     }
-
-    // Bygg fresh optimistic list
     const nowTs = Date.now();
     const freshOptimistic = optimisticQueue.filter(o => (nowTs - toMs(o.played_at)) < OPTIMISTIC_TTL_MS);
-
-    // Merge: optimistic + historyBuffer
     const merged = [...freshOptimistic, ...historyBuffer]
       .filter(x => (excludeId ? x.id !== excludeId : true))
-      .sort((a,b) => toMs(b.played_at) - toMs(a.played_at));
-
-    // Dedupe på track-id (ordningsbevarande)
-    const seen = new Set();
-    const out = [];
-    for (const it of merged) {
-      if (seen.has(it.id)) continue;
-      seen.add(it.id);
-      out.push(it);
-      if (out.length >= 3) break;
-    }
-
+      .sort((a,b) => toMs(b.played_at)-toMs(a.played_at));
+    const seen=new Set(); const out=[];
+    for(const it of merged){ if(seen.has(it.id)) continue; seen.add(it.id); out.push(it); if(out.length>=3) break; }
     return res.json({ items: out });
-  } catch (e) {
-    return res.json({ items: [] });
-  }
+  } catch { return res.json({ items: [] }); }
 });
 
-/* ---------- Health ---------- */
-app.get("/healthz", (_req, res) => res.send("ok"));
+/* ---------- SSE för overlay ---------- */
+const sseClients = new Set();
+app.get("/events",(req,res)=>{
+  res.setHeader("Content-Type","text/event-stream");
+  res.setHeader("Cache-Control","no-store");
+  res.setHeader("Connection","keep-alive");
+  res.flushHeaders?.();
+  res.write(`: connected\n\n`);
+  sseClients.add(res);
+  const keep=setInterval(()=>{ if(res.writableEnded) return clearInterval(keep); res.write(`: ping ${Date.now()}\n\n`); },15000);
+  req.on("close",()=>{clearInterval(keep);sseClients.delete(res);});
+});
+function broadcastSSE(type,payload){
+  const data=`event: ${type}\n`+`data: ${JSON.stringify(payload)}\n\n`;
+  for(const client of sseClients){ if(!client.writableEnded) client.write(data); }
+}
 
-app.listen(PORT, () => console.log("Listening on :" + PORT));
+/* ---------- Twitch listener ---------- */
+if(TWITCH_USERNAME && TWITCH_OAUTH_TOKEN && TWITCH_CHANNEL){
+  const tmiClient=new tmi.Client({
+    identity:{username:TWITCH_USERNAME,password:TWITCH_OAUTH_TOKEN},
+    channels:[TWITCH_CHANNEL]
+  });
+  tmiClient.connect().then(()=>console.log(`[tmi] Connected to #${TWITCH_CHANNEL}`));
+  const SONG_CMD=/^(?:!song|!låt)\b/i;
+  tmiClient.on("message",(channel,userstate,message,self)=>{
+    if(self) return;
+    if(SONG_CMD.test(message)){
+      const by=userstate["display-name"]||userstate.username||"anon";
+      broadcastSSE("song",{by,at:Date.now()});
+      console.log(`[tmi] !song by ${by}`);
+    }
+  });
+}else{
+  console.warn("[tmi] Twitch-variabler saknas, hoppar över chat-listener");
+}
+
+/* ---------- Health ---------- */
+app.get("/healthz",(_req,res)=>res.send("ok"));
+
+app.listen(PORT,()=>console.log("Listening on :"+PORT));
