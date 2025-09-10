@@ -21,15 +21,19 @@ const {
 
 const TOKEN_FILE = path.join(process.cwd(), "refresh_token.json");
 
-// Helpers för refresh token
+/* ---------- Helpers ---------- */
 const getState = () => crypto.randomBytes(16).toString("hex");
 const saveLocalRefresh = (rt) => { try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ refresh_token: rt }, null, 2)); } catch {} };
 const loadRefresh = () => {
   if (process.env.REFRESH_TOKEN) return process.env.REFRESH_TOKEN;
   try { return JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8")).refresh_token; } catch { return null; }
 };
+function noStore(res) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  res.set("Pragma", "no-cache");
+}
 
-// Login för att få refresh token
+/* ---------- OAuth ---------- */
 app.get("/login", (req, res) => {
   const scopes = [
     "user-read-currently-playing",
@@ -48,7 +52,6 @@ app.get("/login", (req, res) => {
   res.redirect("https://accounts.spotify.com/authorize?" + p.toString());
 });
 
-// Callback från Spotify
 app.get("/callback", async (req, res) => {
   const { code, state } = req.query;
   if (!state || state !== req.cookies.spotify_auth_state) return res.status(400).send("State mismatch");
@@ -81,7 +84,7 @@ app.get("/callback", async (req, res) => {
   res.redirect("/");
 });
 
-// Hämta access token via refresh token
+/* ---------- Access token ---------- */
 async function getAccessToken() {
   const refresh_token = loadRefresh();
   if (!refresh_token) return null;
@@ -99,8 +102,9 @@ async function getAccessToken() {
   return data.access_token || null;
 }
 
-// Endpoint: nu spelas
+/* ---------- /now-playing ---------- */
 app.get("/now-playing", async (_req, res) => {
+  noStore(res);
   try {
     const at = await getAccessToken();
     if (!at) return res.json({ playing: false, message: "Ingen användare kopplad än." });
@@ -136,15 +140,31 @@ app.get("/now-playing", async (_req, res) => {
   }
 });
 
-// Endpoint: senaste spelade
+/* ---------- /recent med 5s server-cache & 429-hantering ---------- */
+const RECENT_CACHE_MS = 5000;
+let recentCache = { ts: 0, payload: { items: [] } };
+
 app.get("/recent", async (_req, res) => {
+  noStore(res);
   try {
+    const now = Date.now();
+    if (now - recentCache.ts < RECENT_CACHE_MS) {
+      return res.json(recentCache.payload);
+    }
+
     const at = await getAccessToken();
     if (!at) return res.json({ items: [], error: "no_token" });
 
     const r = await fetch("https://api.spotify.com/v1/me/player/recently-played?limit=25", {
       headers: { Authorization: `Bearer ${at}` }
     });
+
+    if (r.status === 429) {
+      // Respektera backoff om vi får den
+      const retry = parseInt(r.headers.get("retry-after") || "5", 10) * 1000;
+      recentCache.ts = now + Math.max(retry, RECENT_CACHE_MS);
+      return res.json(recentCache.payload); // skicka senaste kända
+    }
 
     if (!r.ok) {
       const txt = await r.text().catch(() => "");
@@ -160,7 +180,6 @@ app.get("/recent", async (_req, res) => {
       if (!track || !track.id) continue;
       if (seen.has(track.id)) continue;
       seen.add(track.id);
-
       out.push({
         id: track.id,
         title: track.name || "",
@@ -168,15 +187,17 @@ app.get("/recent", async (_req, res) => {
         image: track.album?.images?.[0]?.url || "",
         url: track.external_urls?.spotify || ""
       });
-
-      if (out.length >= 6) break;
+      if (out.length >= 6) break; // lite slack till frontenden
     }
 
-    res.json({ items: out });
+    recentCache = { ts: now, payload: { items: out } };
+    res.json(recentCache.payload);
   } catch (e) {
     res.json({ items: [], error: "server_error", detail: e.message });
   }
 });
 
+/* ---------- Health ---------- */
 app.get("/healthz", (_req, res) => res.send("ok"));
+
 app.listen(PORT, () => console.log("Listening on :" + PORT));
