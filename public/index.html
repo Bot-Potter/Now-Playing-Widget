@@ -79,8 +79,12 @@
     recent:document.getElementById("recent")
   };
 
+  // ---- Debug-globals (för DevTools) ----
+  window.__now = null;
+  window.__recent = [];
+
   let now = null;
-  let last3Key = ""; // "id1|id2|id3" – för att bara rendera när listan faktiskt ändras
+  let last3Key = ""; // "id1|id2|id3" – rendera endast när sekvensen ändras
 
   const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
 
@@ -134,10 +138,10 @@
   }
 
   function renderRecent(list){
-    // list = exakt topp 3 från server
+    // list = exakt topp 3 från server (redan dedup och exkluderad now-playing)
     const ids = list.map(x => x.id || "-");
     const key = ids.join("|");
-    if (key === last3Key) return; // ingenting att göra
+    if (key === last3Key) return; // inget nytt → undvik blink
 
     el.recent.innerHTML = "";
     const three = list.slice(0,3);
@@ -162,7 +166,11 @@
       ph.style.visibility = "hidden";
       el.recent.appendChild(ph);
     }
+
     last3Key = key;
+    // debug
+    window.__recent = three;
+    console.debug("[recent]", three.map(x => `${x.title} (${x.id})`));
   }
 
   async function pollNow(){
@@ -170,6 +178,8 @@
       const r = await fetch(API_NOW, { cache:"no-store" });
       const data = await r.json();
       now = data;
+      window.__now = now; // debug
+      console.debug("[now]", now?.title, now?.id);
       paintNow(now);
     } catch {}
   }
