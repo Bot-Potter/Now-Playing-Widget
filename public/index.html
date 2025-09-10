@@ -5,37 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Nu spelas</title>
 <style>
-  :root{
-    --accent:#c84cff;                  /* ersätts dynamiskt via albumfärg */
-    --text:#f6e9f5; --muted:#e9d3f2;
-    --bar-bg:rgba(255,255,255,.16);
-    --radius:18px;
-  }
+  :root{ --accent:#c84cff; --text:#f6e9f5; --muted:#e9d3f2; --bar-bg:rgba(255,255,255,.16); --radius:18px; }
   *{box-sizing:border-box} html,body{height:100%}
-  body{
-    margin:0;background:#0b0710;
-    display:grid;place-items:center;
-    font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter;color:var(--text)
-  }
+  body{margin:0;background:#0b0710;display:grid;place-items:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter;color:var(--text)}
   .wrap{width:min(760px,94vw)}
 
-  /* KORTET */
   .card{
-    position:relative;width:100%;
-    padding:18px 22px 20px;border-radius:var(--radius);
+    position:relative;width:100%;padding:18px 22px 20px;border-radius:var(--radius);
     overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);isolation:isolate;
-    cursor:pointer;
-    text-decoration:none;color:inherit;display:block;
+    cursor:pointer;text-decoration:none;color:inherit;display:block
   }
-  .bg{position:absolute;inset:0;background-size:cover;background-position:center;
-      filter:blur(26px) saturate(130%) brightness(70%);transform:scale(1.12);z-index:-2}
-  .card::after{content:"";position:absolute;inset:0;
-    background:linear-gradient(120deg,rgba(18,8,22,.70),rgba(35,10,35,.42));z-index:-1}
+  .bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(26px) saturate(130%) brightness(70%);transform:scale(1.12);z-index:-2}
+  .card::after{content:"";position:absolute;inset:0;background:linear-gradient(120deg,rgba(18,8,22,.70),rgba(35,10,35,.42));z-index:-1}
 
   .row{display:flex;align-items:center;gap:18px}
   .cover{width:110px;height:110px;flex:0 0 auto;border-radius:50%;padding:5px;
-    background:radial-gradient(closest-side, color-mix(in oklab, var(--accent) 40%, transparent), transparent 68%), var(--accent);
-    position:relative}
+    background:radial-gradient(closest-side, color-mix(in oklab, var(--accent) 40%, transparent), transparent 68%), var(--accent)}
   .cover img{width:100%;height:100%;display:block;border-radius:50%;object-fit:cover;border:4px solid rgba(255,255,255,.12)}
 
   .meta{flex:1;min-width:0}
@@ -49,38 +34,24 @@
 
   .empty{text-align:center;padding:28px 22px;color:#e0cade;opacity:.85}
 
-  /* SENASTE 3 */
-  .recent{
-    margin-top:14px;
-    display:grid;
-    grid-template-columns:repeat(3, minmax(0, 1fr));
-    gap:12px;
-    width:100%;
-  }
+  .recent{margin-top:14px;display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:12px;width:100%}
   .chip{
-    width:100%;
-    display:flex; gap:10px; align-items:center;
-    padding:10px 12px; border-radius:12px;
-    background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.10);
-    text-decoration:none; color:var(--text); min-width:0;
+    width:100%;display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:12px;
+    background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.10);text-decoration:none;color:var(--text);min-width:0;min-height:64px
   }
   .chip:hover{border-color: color-mix(in oklab, var(--accent) 40%, white 0%)}
-  .chip img{width:40px;height:40px;border-radius:8px;object-fit:cover;flex:0 0 auto}
+  .chip img{width:40px;height:40px;border-radius:8px;object-fit:cover;flex:0 0 auto;background:#222}
   .chip .text{min-width:0}
   .chip .t{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .chip .a{font-size:12px;color:#d7c7df;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.95}
 
-  @media (max-width:560px){
-    .recent{grid-template-columns:repeat(2, minmax(0, 1fr))}
-  }
+  @media (max-width:560px){ .recent{grid-template-columns:repeat(2, minmax(0, 1fr))} }
 </style>
 </head>
 <body>
   <div class="wrap">
-    <!-- Gör hela kortet till en <a> -->
     <a id="cardLink" class="card" aria-live="polite" target="_blank" rel="noopener">
       <div id="bg" class="bg"></div>
-
       <div id="content" class="row" hidden>
         <div class="cover"><img id="cover" alt="Omslag"></div>
         <div class="meta">
@@ -90,11 +61,9 @@
           <div class="progress"><div id="bar" class="bar"></div></div>
         </div>
       </div>
-
       <div id="empty" class="empty">Ingen låt spelas just nu.</div>
     </a>
 
-    <!-- Senaste 3 -->
     <div id="recent" class="recent" aria-label="Senaste låtar"></div>
   </div>
 
@@ -110,7 +79,9 @@
     recent:document.getElementById("recent")
   };
 
-  let last=null;
+  let nowData = null;
+  let recentCache = [];     // senaste visade (för fallback)
+  let lastRecentKey = "";   // undvik onödig DOM
 
   const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
 
@@ -130,7 +101,7 @@
         }
         if(!count) return resolve("#c84cff");
         r=Math.round(r/count);g=Math.round(g/count);b=Math.round(b/count);
-        resolve(`rgb(${r},${g},${b})`);
+        resolve(`rgb(${r}, ${g}, ${b})`);
       };
       img.onerror=()=>resolve("#c84cff");
       img.src=url;
@@ -140,59 +111,118 @@
 
   function paintNow(d){
     if(!d||!d.playing){
-      el.content.hidden=true; el.empty.hidden=false; el.bg.style.backgroundImage="";
-      el.cardLink.href="#"; return;
+      el.content.hidden = true;
+      el.empty.hidden = false;
+      el.bg.style.backgroundImage = "";
+      el.cardLink.href = "#";
+      return;
     }
-    el.content.hidden=false; el.empty.hidden=true;
+    el.content.hidden = false;
+    el.empty.hidden = true;
 
-    el.title.textContent=d.title||"Okänd låt";
-    el.artist.textContent=(d.artists||[]).join(", ")||d.album||"";
-    const p=d.progress_ms||0,t=d.duration_ms||1;
-    el.tStart.textContent=ms(p); el.tEnd.textContent=ms(t);
-    el.bar.style.width=(100*p/t)+"%";
+    el.title.textContent = d.title || "Okänd låt";
+    el.artist.textContent = (d.artists||[]).join(", ") || d.album || "";
+    const p = d.progress_ms || 0, t = d.duration_ms || 1;
+    el.tStart.textContent = ms(p); el.tEnd.textContent = ms(t);
+    el.bar.style.width = (100*p/t) + "%";
 
-    if(d.image){
-      el.cover.src=d.image;
-      el.bg.style.backgroundImage=`url("${d.image}")`;
+    if (d.image) {
+      el.cover.src = d.image;
+      el.bg.style.backgroundImage = `url("${d.image}")`;
       dominantColorFromURL(d.image).then(setAccent);
     }
     el.cardLink.href = d.url || "#";
   }
 
-  function paintRecent(list){
-    el.recent.innerHTML="";
-    for(const it of list.slice(0,3)){
-      const a=document.createElement("a");
-      a.className="chip"; a.href=it.url||"#"; a.target="_blank"; a.rel="noopener";
-      a.innerHTML=`
-        <img src="${it.image||""}" alt="">
+  function keyFor(list){ return list.map(it => it.id).join("|"); }
+
+  function renderRecent(list){
+    el.recent.innerHTML = "";
+    const three = list.slice(0,3);
+    for(const it of three){
+      const a = document.createElement("a");
+      a.className = "chip";
+      a.href = it.url || "#";
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.innerHTML = `
+        <img src="${it.image || ""}" alt="">
         <div class="text">
-          <div class="t">${it.title||""}</div>
+          <div class="t">${it.title || ""}</div>
           <div class="a">${(it.artists||[]).join(", ")}</div>
         </div>
       `;
       el.recent.appendChild(a);
     }
-    // placeholders om färre än 3
-    for(let k=list.length;k<3;k++){
-      const ph=document.createElement("div");ph.className="chip";ph.style.visibility="hidden";el.recent.appendChild(ph);
+    for(let k=three.length;k<3;k++){
+      const ph = document.createElement("div");
+      ph.className = "chip";
+      ph.style.visibility = "hidden";
+      el.recent.appendChild(ph);
     }
   }
 
   async function pollNow(){
-    try{ const r=await fetch(API_NOW,{cache:"no-store"}); last=await r.json(); paintNow(last);}catch{}
-  }
-  async function pollRecent(){
-    try{
-      const r=await fetch(API_REC,{cache:"no-store"});const data=await r.json();
-      const filtered=(data.items||[]).filter(it=>it.id!==last?.id);
-      paintRecent(filtered);
-    }catch{}
+    try {
+      const r = await fetch(API_NOW, { cache:"no-store" });
+      const json = await r.json();
+      nowData = json;
+      paintNow(json);
+    } catch {}
   }
 
-  setInterval(pollNow,1000);
-  setInterval(pollRecent,1000);
-  pollNow();pollRecent();
+  // Backoff-variabel för /recent om Spotify throttlar
+  let recentBackoffMs = 0;
+
+  async function pollRecent(){
+    try {
+      if (recentBackoffMs > 0) return; // tillfälligt pausad
+      const r = await fetch(API_REC, { cache:"no-store" });
+      const data = await r.json();
+
+      // om servern signalerar throttling fel → backoff lite
+      if (data && (data.error === "spotify_429" || data.error === "server_error")) {
+        recentBackoffMs = 3000; // 3s paus
+        setTimeout(() => recentBackoffMs = 0, recentBackoffMs);
+      }
+
+      let list = Array.isArray(data.items) ? data.items : [];
+      const nowId = nowData?.id || null;
+      if (nowId) list = list.filter(it => it.id !== nowId);
+
+      // fyll upp till 3 med cache om nödvändigt
+      if (list.length < 3 && recentCache.length) {
+        const ids = new Set(list.map(x => x.id));
+        for (const it of recentCache) {
+          if (list.length >= 3) break;
+          if (!ids.has(it.id) && it.id !== nowId) list.push(it);
+        }
+      }
+
+      list = list.slice(0,3);
+      if (list.length) recentCache = list;
+
+      const key = keyFor(list);
+      if (key !== lastRecentKey) {
+        renderRecent(list);
+        lastRecentKey = key;
+      }
+    } catch {
+      // fallback till cache så UI inte “dör”
+      if (recentCache.length) {
+        const key = keyFor(recentCache);
+        if (key !== lastRecentKey) {
+          renderRecent(recentCache);
+          lastRecentKey = key;
+        }
+      }
+    }
+  }
+
+  // 1 Hz polling
+  setInterval(pollNow, 1000);
+  setInterval(pollRecent, 1000);
+  pollNow(); pollRecent();
 </script>
 </body>
 </html>
