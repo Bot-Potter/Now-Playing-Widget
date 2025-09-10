@@ -68,7 +68,8 @@
   </div>
 
 <script>
-  const API_DECK = "/deck"; // en samlad endpoint
+  const API_NOW = "/now-playing";
+  const API_REC = "/recent"; // vi skickar exclude_id som query
 
   const el = {
     cardLink:document.getElementById("cardLink"),
@@ -78,9 +79,13 @@
     recent:document.getElementById("recent")
   };
 
-  let lastRecentKey = "";
-
   const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
+
+  let now = null;                 // aktuell now-playing
+  let prevNow = null;             // föregående låt (för optimistic recent)
+  let optimistic = null;          // temporärt recent-objekt tills Spotify hunnit uppdatera
+  let optimisticUntil = 0;        // tidsgräns för optimistic (ms timestamp)
+  let lastRecentEtag = "";        // för att undvika onödiga re-renders
 
   async function dominantColorFromURL(url){
     return new Promise((resolve)=>{
@@ -106,8 +111,8 @@
   }
   const setAccent=(c)=>document.documentElement.style.setProperty("--accent",c);
 
-  function renderNow(now){
-    if(!now || !now.playing){
+  function renderNow(d){
+    if(!d||!d.playing){
       el.content.hidden = true;
       el.empty.hidden = false;
       el.bg.style.backgroundImage = "";
@@ -117,28 +122,38 @@
     el.content.hidden = false;
     el.empty.hidden = true;
 
-    el.title.textContent = now.title || "Okänd låt";
-    el.artist.textContent = (now.artists||[]).join(", ") || now.album || "";
-    const p = now.progress_ms || 0, t = now.duration_ms || 1;
+    el.title.textContent = d.title || "Okänd låt";
+    el.artist.textContent = (d.artists||[]).join(", ") || d.album || "";
+    const p = d.progress_ms || 0, t = d.duration_ms || 1;
     el.tStart.textContent = ms(p); el.tEnd.textContent = ms(t);
     el.bar.style.width = (100*p/t) + "%";
 
-    if (now.image) {
-      el.cover.src = now.image;
-      el.bg.style.backgroundImage = `url("${now.image}")`;
-      dominantColorFromURL(now.image).then(setAccent);
+    if (d.image) {
+      el.cover.src = d.image;
+      el.bg.style.backgroundImage = `url("${d.image}")`;
+      dominantColorFromURL(d.image).then(setAccent);
     }
-    el.cardLink.href = now.url || "#";
+    el.cardLink.href = d.url || "#";
   }
 
-  function keyFor(list){ return list.map(it => it.id + "@" + (it.played_at || "")).join("|"); }
-
   function renderRecent(list){
-    const key = keyFor(list.slice(0,3));
-    if (key === lastRecentKey) return; // undvik blink
+    // Om vi har en optimistic post och den inte passerat tidsgränsen
+    const nowMs = Date.now();
+    const useOptimistic = optimistic && nowMs < optimisticUntil;
 
+    // Bygg renderlista: optimistic (om finns) + serverlista utan dubbletter
+    const out = [];
+    if (useOptimistic) out.push(optimistic);
+
+    for (const it of list) {
+      if (useOptimistic && it.id === optimistic.id) continue;
+      out.push(it);
+      if (out.length >= 3) break;
+    }
+
+    // Rendera
     el.recent.innerHTML = "";
-    const three = list.slice(0,3);
+    const three = out.slice(0,3);
     for(const it of three){
       const a = document.createElement("a");
       a.className = "chip";
@@ -160,21 +175,65 @@
       ph.style.visibility = "hidden";
       el.recent.appendChild(ph);
     }
-    lastRecentKey = key;
   }
 
-  async function pollDeck(){
+  async function pollNow(){
     try {
-      const r = await fetch(API_DECK, { cache:"no-store" });
+      const r = await fetch(API_NOW, { cache:"no-store" });
       const data = await r.json();
-      renderNow(data.now || { playing:false });
-      renderRecent(Array.isArray(data.recent) ? data.recent : []);
+
+      // detektera låtbyte: skapa optimistic recent av föregående låt
+      const oldId = now?.id || null;
+      const newId = data?.id || null;
+
+      if (now?.playing && oldId && newId && oldId !== newId) {
+        // skapa optimistic av prev "now"
+        optimistic = {
+          id: now.id,
+          title: now.title,
+          artists: now.artists || [],
+          image: now.image,
+          url: now.url,
+          played_at: new Date().toISOString()
+        };
+        optimisticUntil = Date.now() + 20000; // håll max 20s
+      }
+
+      prevNow = now;
+      now = data;
+      renderNow(now);
     } catch {}
   }
 
-  // en enda poll per sekund – servern gör resten
-  setInterval(pollDeck, 1000);
-  pollDeck();
+  async function pollRecent(){
+    try {
+      const exclude = now?.id ? `?exclude_id=${encodeURIComponent(now.id)}` : "";
+      const r = await fetch(API_REC + exclude, { cache:"no-store" });
+      const data = await r.json();
+
+      // Om etag oförändrad och vi inte är i optimistic-läge → hoppa render
+      if (data && data.etag && data.etag === lastRecentEtag && !(optimistic && Date.now() < optimisticUntil)) {
+        return;
+      }
+      lastRecentEtag = data.etag || "";
+
+      const list = Array.isArray(data.items) ? data.items : [];
+      renderRecent(list);
+
+      // Om servern nu innehåller optimistic-låten → avbryt optimistic
+      if (optimistic && list.some(x => x.id === optimistic.id)) {
+        optimistic = null;
+        optimisticUntil = 0;
+      }
+    } catch {
+      // Misslyckad fetch: låt optimistic ligga kvar tills den timeoutar
+    }
+  }
+
+  // Hämta NOW minst 1/s, RECENT också 1/s (servern cachar 3s)
+  setInterval(pollNow, 1000);
+  setInterval(pollRecent, 1000);
+  pollNow(); pollRecent();
 </script>
 </body>
 </html>
