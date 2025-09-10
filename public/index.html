@@ -69,7 +69,7 @@
 
 <script>
   const API_NOW = "/now-playing";
-  const API_REC = "/recent"; // vi skickar exclude_id som query
+  const API_REC = "/recent"; // vi skickar exclude_id
 
   const el = {
     cardLink:document.getElementById("cardLink"),
@@ -81,11 +81,10 @@
 
   const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
 
-  let now = null;                 // aktuell now-playing
-  let prevNow = null;             // föregående låt (för optimistic recent)
-  let optimistic = null;          // temporärt recent-objekt tills Spotify hunnit uppdatera
-  let optimisticUntil = 0;        // tidsgräns för optimistic (ms timestamp)
-  let lastRecentEtag = "";        // för att undvika onödiga re-renders
+  let now = null;
+  let optimistic = null;      // föregående låt som “borde” dyka upp i recent
+  let optimisticUntil = 0;    // hur länge den får ligga kvar
+  let lastRenderedKey = "";   // nyckel för den FAKTISKT renderade listan
 
   async function dominantColorFromURL(url){
     return new Promise((resolve)=>{
@@ -136,44 +135,58 @@
     el.cardLink.href = d.url || "#";
   }
 
-  function renderRecent(list){
-    // Om vi har en optimistic post och den inte passerat tidsgränsen
+  function composeAndMaybeRender(serverList){
+    // 1) Ta topp från server (max 5 för safety)
+    const base = (serverList || []).slice(0,5);
+
+    // 2) Om optimistic aktiv och inte redan i base: placera överst
     const nowMs = Date.now();
-    const useOptimistic = optimistic && nowMs < optimisticUntil;
-
-    // Bygg renderlista: optimistic (om finns) + serverlista utan dubbletter
+    const activeOptimistic = optimistic && nowMs < optimisticUntil;
     const out = [];
-    if (useOptimistic) out.push(optimistic);
 
-    for (const it of list) {
-      if (useOptimistic && it.id === optimistic.id) continue;
+    if (activeOptimistic) out.push(optimistic);
+    for (const it of base) {
+      if (activeOptimistic && it.id === optimistic.id) continue;
       out.push(it);
       if (out.length >= 3) break;
     }
 
-    // Rendera
-    el.recent.innerHTML = "";
-    const three = out.slice(0,3);
-    for(const it of three){
-      const a = document.createElement("a");
-      a.className = "chip";
-      a.href = it.url || "#";
-      a.target = "_blank";
-      a.rel = "noopener";
-      a.innerHTML = `
-        <img src="${it.image || ""}" alt="">
-        <div class="text">
-          <div class="t">${it.title || ""}</div>
-          <div class="a">${(it.artists||[]).join(", ")}</div>
-        </div>
-      `;
-      el.recent.appendChild(a);
+    // 3) Bygg render-nyckel på listans ID:n (ordningsberoende)
+    const key = out.slice(0,3).map(x => x?.id || "-").join("|");
+
+    // 4) Rendera endast om nyckeln ändrats
+    if (key !== lastRenderedKey) {
+      el.recent.innerHTML = "";
+      const three = out.slice(0,3);
+      for(const it of three){
+        if (!it) break;
+        const a = document.createElement("a");
+        a.className = "chip";
+        a.href = it.url || "#";
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.innerHTML = `
+          <img src="${it.image || ""}" alt="">
+          <div class="text">
+            <div class="t">${it.title || ""}</div>
+            <div class="a">${(it.artists||[]).join(", ")}</div>
+          </div>
+        `;
+        el.recent.appendChild(a);
+      }
+      for(let k=three.length;k<3;k++){
+        const ph = document.createElement("div");
+        ph.className = "chip";
+        ph.style.visibility = "hidden";
+        el.recent.appendChild(ph);
+      }
+      lastRenderedKey = key;
     }
-    for(let k=three.length;k<3;k++){
-      const ph = document.createElement("div");
-      ph.className = "chip";
-      ph.style.visibility = "hidden";
-      el.recent.appendChild(ph);
+
+    // 5) Om servern nu innehåller optimistic-låten, stäng av den
+    if (activeOptimistic && base.some(x => x.id === optimistic.id)) {
+      optimistic = null;
+      optimisticUntil = 0;
     }
   }
 
@@ -182,12 +195,10 @@
       const r = await fetch(API_NOW, { cache:"no-store" });
       const data = await r.json();
 
-      // detektera låtbyte: skapa optimistic recent av föregående låt
+      // Byt-låt-detektor → skapa optimistic av föregående "now"
       const oldId = now?.id || null;
       const newId = data?.id || null;
-
       if (now?.playing && oldId && newId && oldId !== newId) {
-        // skapa optimistic av prev "now"
         optimistic = {
           id: now.id,
           title: now.title,
@@ -196,10 +207,9 @@
           url: now.url,
           played_at: new Date().toISOString()
         };
-        optimisticUntil = Date.now() + 20000; // håll max 20s
+        optimisticUntil = Date.now() + 20000; // max 20 s
       }
 
-      prevNow = now;
       now = data;
       renderNow(now);
     } catch {}
@@ -210,27 +220,14 @@
       const exclude = now?.id ? `?exclude_id=${encodeURIComponent(now.id)}` : "";
       const r = await fetch(API_REC + exclude, { cache:"no-store" });
       const data = await r.json();
-
-      // Om etag oförändrad och vi inte är i optimistic-läge → hoppa render
-      if (data && data.etag && data.etag === lastRecentEtag && !(optimistic && Date.now() < optimisticUntil)) {
-        return;
-      }
-      lastRecentEtag = data.etag || "";
-
       const list = Array.isArray(data.items) ? data.items : [];
-      renderRecent(list);
-
-      // Om servern nu innehåller optimistic-låten → avbryt optimistic
-      if (optimistic && list.some(x => x.id === optimistic.id)) {
-        optimistic = null;
-        optimisticUntil = 0;
-      }
+      composeAndMaybeRender(list);
     } catch {
-      // Misslyckad fetch: låt optimistic ligga kvar tills den timeoutar
+      // Om fetch failar – rendera inte om, låt senaste layout stå kvar (och optimistic timear ut)
     }
   }
 
-  // Hämta NOW minst 1/s, RECENT också 1/s (servern cachar 3s)
+  // Minst 1 Hz för now-playing + recent
   setInterval(pollNow, 1000);
   setInterval(pollRecent, 1000);
   pollNow(); pollRecent();
