@@ -6,7 +6,7 @@
 <title>Nu spelas</title>
 <style>
   :root{
-    --accent:#c84cff;                  /* ersätts dynamiskt */
+    --accent:#c84cff;                  /* ersätts dynamiskt via albumfärg */
     --text:#f6e9f5; --muted:#e9d3f2;
     --bar-bg:rgba(255,255,255,.16);
     --radius:18px;
@@ -19,10 +19,13 @@
   }
   .wrap{width:min(760px,94vw)}
 
+  /* KORTET */
   .card{
     position:relative;width:100%;
     padding:18px 22px 20px;border-radius:var(--radius);
-    overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);isolation:isolate
+    overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);isolation:isolate;
+    cursor:pointer;
+    text-decoration:none;color:inherit;display:block;
   }
   .bg{position:absolute;inset:0;background-size:cover;background-position:center;
       filter:blur(26px) saturate(130%) brightness(70%);transform:scale(1.12);z-index:-2}
@@ -34,9 +37,6 @@
     background:radial-gradient(closest-side, color-mix(in oklab, var(--accent) 40%, transparent), transparent 68%), var(--accent);
     position:relative}
   .cover img{width:100%;height:100%;display:block;border-radius:50%;object-fit:cover;border:4px solid rgba(255,255,255,.12)}
-  .cover .play{position:absolute;right:10px;bottom:10px;width:26px;height:26px;border-radius:50%;
-    background:rgba(0,0,0,.45);display:grid;place-items:center;border:1px solid rgba(255,255,255,.25)}
-  .cover .play:before{content:"";border-left:10px solid var(--accent);border-top:6px solid transparent;border-bottom:6px solid transparent;margin-left:2px}
 
   .meta{flex:1;min-width:0}
   .title{margin:0;font-weight:800;letter-spacing:.2px;font-size:22px;line-height:1.2;text-shadow:0 2px 8px rgba(0,0,0,.35)}
@@ -49,36 +49,40 @@
 
   .empty{text-align:center;padding:28px 22px;color:#e0cade;opacity:.85}
 
-  /* Senaste låtar */
+  /* SENASTE 3 */
   .recent{
-    margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap
+    margin-top:14px;
+    display:grid;
+    grid-template-columns:repeat(3, minmax(0, 1fr));
+    gap:12px;
+    width:100%;
   }
   .chip{
-    display:flex; gap:8px; align-items:center; padding:8px 10px; border-radius:12px;
+    width:100%;
+    display:flex; gap:10px; align-items:center;
+    padding:10px 12px; border-radius:12px;
     background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.10);
-    text-decoration:none; color:var(--text); min-width:0
+    text-decoration:none; color:var(--text); min-width:0;
   }
   .chip:hover{border-color: color-mix(in oklab, var(--accent) 40%, white 0%)}
-  .chip img{width:34px;height:34px;border-radius:8px;object-fit:cover;flex:0 0 auto}
+  .chip img{width:40px;height:40px;border-radius:8px;object-fit:cover;flex:0 0 auto}
   .chip .text{min-width:0}
-  .chip .t{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
-  .chip .a{font-size:12px;color:#d7c7df;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+  .chip .t{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip .a{font-size:12px;color:#d7c7df;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.95}
 
-  @media (max-width:460px){
-    .cover{width:92px;height:92px}
-    .title{font-size:18px}
-    .chip .t{max-width:150px}
-    .chip .a{max-width:150px}
+  @media (max-width:560px){
+    .recent{grid-template-columns:repeat(2, minmax(0, 1fr))}
   }
 </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="card" aria-live="polite">
+    <!-- Gör hela kortet till en <a> -->
+    <a id="cardLink" class="card" aria-live="polite" target="_blank" rel="noopener">
       <div id="bg" class="bg"></div>
 
       <div id="content" class="row" hidden>
-        <div class="cover"><img id="cover" alt="Omslag"><div class="play" aria-hidden="true"></div></div>
+        <div class="cover"><img id="cover" alt="Omslag"></div>
         <div class="meta">
           <h1 id="title" class="title">–</h1>
           <div id="artist" class="artist">–</div>
@@ -88,17 +92,18 @@
       </div>
 
       <div id="empty" class="empty">Ingen låt spelas just nu.</div>
-    </div>
+    </a>
 
     <!-- Senaste 3 -->
     <div id="recent" class="recent" aria-label="Senaste låtar"></div>
   </div>
 
 <script>
-  const API_NOW = "/now-playing";   // ändra till full URL om du bäddar in på annan domän
+  const API_NOW = "/now-playing";
   const API_REC = "/recent";
 
   const el = {
+    cardLink:document.getElementById("cardLink"),
     bg:document.getElementById("bg"), content:document.getElementById("content"), empty:document.getElementById("empty"),
     cover:document.getElementById("cover"), title:document.getElementById("title"), artist:document.getElementById("artist"),
     tStart:document.getElementById("tStart"), tEnd:document.getElementById("tEnd"), bar:document.getElementById("bar"),
@@ -109,47 +114,40 @@
 
   const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
 
-  // Dominant färg från bild (snabb med nedskalning)
   async function dominantColorFromURL(url){
     return new Promise((resolve)=>{
       const img = new Image();
-      img.crossOrigin = "anonymous"; // funkar för de flesta Spotify-CDN
+      img.crossOrigin = "anonymous";
       img.onload = () => {
-        const w = 50, h = 50;
-        const c = document.createElement("canvas");
-        c.width = w; c.height = h;
-        const ctx = c.getContext("2d", { willReadFrequently: true });
-        ctx.drawImage(img, 0, 0, w, h);
-        const { data } = ctx.getImageData(0, 0, w, h);
+        const w=50,h=50; const c=document.createElement("canvas"); c.width=w;c.height=h;
+        const ctx=c.getContext("2d",{willReadFrequently:true});
+        ctx.drawImage(img,0,0,w,h);
+        const {data}=ctx.getImageData(0,0,w,h);
         let r=0,g=0,b=0,count=0;
         for(let i=0;i<data.length;i+=4){
-          const a = data[i+3];
-          if (a < 128) continue; // skippa transparent
-          r += data[i]; g += data[i+1]; b += data[i+2]; count++;
+          if(data[i+3]<128) continue;
+          r+=data[i];g+=data[i+1];b+=data[i+2];count++;
         }
-        if (!count) return resolve("#c84cff");
-        r = Math.round(r/count); g = Math.round(g/count); b = Math.round(b/count);
-        resolve(`rgb(${r}, ${g}, ${b})`);
+        if(!count) return resolve("#c84cff");
+        r=Math.round(r/count);g=Math.round(g/count);b=Math.round(b/count);
+        resolve(`rgb(${r},${g},${b})`);
       };
-      img.onerror = () => resolve("#c84cff");
-      img.src = url;
+      img.onerror=()=>resolve("#c84cff");
+      img.src=url;
     });
   }
-
-  function setAccent(color){
-    document.documentElement.style.setProperty("--accent", color);
-  }
+  const setAccent=(c)=>document.documentElement.style.setProperty("--accent",c);
 
   function paintNow(d){
     if(!d||!d.playing){
       el.content.hidden=true; el.empty.hidden=false; el.bg.style.backgroundImage="";
-      return;
+      el.cardLink.href="#"; return;
     }
     el.content.hidden=false; el.empty.hidden=true;
 
     el.title.textContent=d.title||"Okänd låt";
     el.artist.textContent=(d.artists||[]).join(", ")||d.album||"";
-    const p=d.progress_ms||0, t=d.duration_ms||1;
+    const p=d.progress_ms||0,t=d.duration_ms||1;
     el.tStart.textContent=ms(p); el.tEnd.textContent=ms(t);
     el.bar.style.width=(100*p/t)+"%";
 
@@ -158,54 +156,43 @@
       el.bg.style.backgroundImage=`url("${d.image}")`;
       dominantColorFromURL(d.image).then(setAccent);
     }
+    el.cardLink.href = d.url || "#";
   }
 
   function paintRecent(list){
-    el.recent.innerHTML = "";
-    if(!list || !list.length) return;
-
-    for(const it of list){
-      const a = document.createElement("a");
-      a.className = "chip";
-      a.href = it.url || "#";
-      a.target = "_blank";
-      a.rel = "noopener";
-      a.innerHTML = `
-        <img src="${it.image || ""}" alt="">
+    el.recent.innerHTML="";
+    for(const it of list.slice(0,3)){
+      const a=document.createElement("a");
+      a.className="chip"; a.href=it.url||"#"; a.target="_blank"; a.rel="noopener";
+      a.innerHTML=`
+        <img src="${it.image||""}" alt="">
         <div class="text">
-          <div class="t">${it.title || ""}</div>
+          <div class="t">${it.title||""}</div>
           <div class="a">${(it.artists||[]).join(", ")}</div>
         </div>
       `;
       el.recent.appendChild(a);
     }
+    // placeholders om färre än 3
+    for(let k=list.length;k<3;k++){
+      const ph=document.createElement("div");ph.className="chip";ph.style.visibility="hidden";el.recent.appendChild(ph);
+    }
   }
 
   async function pollNow(){
-    try{
-      const r = await fetch(API_NOW, {cache:"no-store"});
-      last = await r.json();
-      paintNow(last);
-    }catch(e){ /* tyst */ }
+    try{ const r=await fetch(API_NOW,{cache:"no-store"}); last=await r.json(); paintNow(last);}catch{}
   }
-
   async function pollRecent(){
     try{
-      const r = await fetch(API_REC, {cache:"no-store"});
-      const data = await r.json();
-      // Om nu spelas finns i recent: ta bort den
-      const filtered = (data.items||[]).filter(it => it.id !== last?.id).slice(0,3);
+      const r=await fetch(API_REC,{cache:"no-store"});const data=await r.json();
+      const filtered=(data.items||[]).filter(it=>it.id!==last?.id);
       paintRecent(filtered);
-    }catch(e){ /* tyst */ }
+    }catch{}
   }
 
-  // varje sekund för “nu spelas”
-  setInterval(pollNow, 1000);
-  pollNow();
-
-  // ladda recent nu + var 15:e sekund
-  pollRecent();
-  setInterval(pollRecent, 15000);
+  setInterval(pollNow,1000);
+  setInterval(pollRecent,1000);
+  pollNow();pollRecent();
 </script>
 </body>
 </html>
