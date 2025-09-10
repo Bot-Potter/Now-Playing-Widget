@@ -21,7 +21,7 @@ const {
 
 const TOKEN_FILE = path.join(process.cwd(), "refresh_token.json");
 
-// helpers
+// Helpers för refresh token
 const getState = () => crypto.randomBytes(16).toString("hex");
 const saveLocalRefresh = (rt) => { try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ refresh_token: rt }, null, 2)); } catch {} };
 const loadRefresh = () => {
@@ -29,6 +29,7 @@ const loadRefresh = () => {
   try { return JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8")).refresh_token; } catch { return null; }
 };
 
+// Login för att få refresh token
 app.get("/login", (req, res) => {
   const scopes = [
     "user-read-currently-playing",
@@ -47,6 +48,7 @@ app.get("/login", (req, res) => {
   res.redirect("https://accounts.spotify.com/authorize?" + p.toString());
 });
 
+// Callback från Spotify
 app.get("/callback", async (req, res) => {
   const { code, state } = req.query;
   if (!state || state !== req.cookies.spotify_auth_state) return res.status(400).send("State mismatch");
@@ -79,6 +81,7 @@ app.get("/callback", async (req, res) => {
   res.redirect("/");
 });
 
+// Hämta access token via refresh token
 async function getAccessToken() {
   const refresh_token = loadRefresh();
   if (!refresh_token) return null;
@@ -96,6 +99,7 @@ async function getAccessToken() {
   return data.access_token || null;
 }
 
+// Endpoint: nu spelas
 app.get("/now-playing", async (_req, res) => {
   try {
     const at = await getAccessToken();
@@ -132,39 +136,45 @@ app.get("/now-playing", async (_req, res) => {
   }
 });
 
-// NYTT: senaste 3
+// Endpoint: senaste spelade
 app.get("/recent", async (_req, res) => {
   try {
     const at = await getAccessToken();
-    if (!at) return res.json({ items: [] });
+    if (!at) return res.json({ items: [], error: "no_token" });
 
-    // Hämta 10 och plocka ut 3 unika spår
-    const r = await fetch("https://api.spotify.com/v1/me/player/recently-played?limit=10", {
+    const r = await fetch("https://api.spotify.com/v1/me/player/recently-played?limit=25", {
       headers: { Authorization: `Bearer ${at}` }
     });
-    if (!r.ok) return res.json({ items: [] });
-    const json = await r.json();
 
+    if (!r.ok) {
+      const txt = await r.text().catch(() => "");
+      return res.json({ items: [], error: `spotify_${r.status}`, detail: txt });
+    }
+
+    const json = await r.json();
     const seen = new Set();
     const out = [];
+
     for (const it of json.items || []) {
       const track = it.track;
-      if (!track) continue;
+      if (!track || !track.id) continue;
       if (seen.has(track.id)) continue;
       seen.add(track.id);
+
       out.push({
         id: track.id,
         title: track.name || "",
-        artists: track.artists?.map(a => a.name) || [],
+        artists: (track.artists || []).map(a => a.name),
         image: track.album?.images?.[0]?.url || "",
         url: track.external_urls?.spotify || ""
       });
-      if (out.length >= 3) break;
+
+      if (out.length >= 6) break;
     }
 
     res.json({ items: out });
   } catch (e) {
-    res.json({ items: [] });
+    res.json({ items: [], error: "server_error", detail: e.message });
   }
 });
 
