@@ -8,20 +8,19 @@
   :root{ --accent:#c84cff; --text:#f6e9f5; --muted:#e9d3f2; --bar-bg:rgba(255,255,255,.16); --radius:18px; }
   *{box-sizing:border-box} html,body{height:100%}
   body{
-    margin:0;background:transparent; /* OBS: transparent bakgrund för OBS */
+    margin:0;background:transparent;
     font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter;color:var(--text);
     overflow:hidden;
   }
 
-  /* Container sitter fast i botten och animeras in/ut */
   .tray{
     position:fixed; left:50%; bottom:0; transform:translate(-50%, 120%);
     transition:transform 420ms cubic-bezier(.2,.9,.2,1);
     will-change:transform;
     width:min(720px, 92vw);
-    pointer-events:none; /* så man inte klickar det av misstag i OBS */
+    pointer-events:none;
   }
-  .tray.show{ transform:translate(-50%, -14px); } /* dyker upp ovanför nederkanten */
+  .tray.show{ transform:translate(-50%, -14px); }
 
   .card{
     position:relative;width:100%;padding:16px 20px 18px;border-radius:var(--radius);
@@ -125,22 +124,28 @@
 
   async function handleSongTrigger(who){
     try{
+      console.log("[Overlay] Trigger från", who);
       const r = await fetch(API_NOW, { cache:"no-store" });
       const now = await r.json();
+      console.log("[Overlay] Fick låt:", now);
       if (paint(now, who)) showFor(15000);
-    }catch{}
+    }catch(e){
+      console.error("[Overlay] Fel vid handleSongTrigger", e);
+    }
   }
 
-  // Lyssna på SSE /events
+  // SSE från servern
   const es = new EventSource("/events");
+  es.onopen = () => console.log("[SSE] connected");
   es.addEventListener("song", (ev)=>{
+    console.log("[SSE] song event", ev.data);
     let by = null;
     try { by = JSON.parse(ev.data).by || null; } catch {}
     handleSongTrigger(by);
   });
-  es.onerror = () => { /* låt den reconnecta automatiskt */ };
+  es.onerror = (err) => console.error("[SSE] error", err);
 
-  // För lokal test: tryck S för att manuellt trigga
+  // Testtrigger med tangent S
   window.addEventListener("keydown", (e)=>{ if(e.key.toLowerCase()==="s") handleSongTrigger("debug"); });
 </script>
 </body>
