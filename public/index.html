@@ -25,7 +25,7 @@
 
   .meta{flex:1;min-width:0}
   .title{margin:0;font-weight:800;letter-spacing:.2px;font-size:22px;line-height:1.2;text-shadow:0 2px 8px rgba(0,0,0,.35)}
-  .artist{margin:.25rem 0 0;color:var(--muted);font-weight:600;opacity:.95}
+  .artist{margin:.25rem 0 0;color:#e0cade;font-weight:600;opacity:.95}
 
   .times{margin:.9rem 0 .35rem;display:flex;justify-content:space-between;font-variant-numeric:tabular-nums;font-weight:700;color:var(--muted)}
   .times .right{color:var(--accent)}
@@ -79,12 +79,10 @@
     recent:document.getElementById("recent")
   };
 
-  const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
-
   let now = null;
-  let optimistic = null;      // föregående låt som “borde” dyka upp i recent
-  let optimisticUntil = 0;    // hur länge den får ligga kvar
-  let lastRenderedKey = "";   // nyckel för den FAKTISKT renderade listan
+  let last3Key = ""; // "id1|id2|id3" – för att bara rendera när listan faktiskt ändras
+
+  const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
 
   async function dominantColorFromURL(url){
     return new Promise((resolve)=>{
@@ -110,7 +108,7 @@
   }
   const setAccent=(c)=>document.documentElement.style.setProperty("--accent",c);
 
-  function renderNow(d){
+  function paintNow(d){
     if(!d||!d.playing){
       el.content.hidden = true;
       el.empty.hidden = false;
@@ -135,83 +133,44 @@
     el.cardLink.href = d.url || "#";
   }
 
-  function composeAndMaybeRender(serverList){
-    // 1) Ta topp från server (max 5 för safety)
-    const base = (serverList || []).slice(0,5);
+  function renderRecent(list){
+    // list = exakt topp 3 från server
+    const ids = list.map(x => x.id || "-");
+    const key = ids.join("|");
+    if (key === last3Key) return; // ingenting att göra
 
-    // 2) Om optimistic aktiv och inte redan i base: placera överst
-    const nowMs = Date.now();
-    const activeOptimistic = optimistic && nowMs < optimisticUntil;
-    const out = [];
-
-    if (activeOptimistic) out.push(optimistic);
-    for (const it of base) {
-      if (activeOptimistic && it.id === optimistic.id) continue;
-      out.push(it);
-      if (out.length >= 3) break;
+    el.recent.innerHTML = "";
+    const three = list.slice(0,3);
+    for(const it of three){
+      const a = document.createElement("a");
+      a.className = "chip";
+      a.href = it.url || "#";
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.innerHTML = `
+        <img src="${it.image || ""}" alt="">
+        <div class="text">
+          <div class="t">${it.title || ""}</div>
+          <div class="a">${(it.artists||[]).join(", ")}</div>
+        </div>
+      `;
+      el.recent.appendChild(a);
     }
-
-    // 3) Bygg render-nyckel på listans ID:n (ordningsberoende)
-    const key = out.slice(0,3).map(x => x?.id || "-").join("|");
-
-    // 4) Rendera endast om nyckeln ändrats
-    if (key !== lastRenderedKey) {
-      el.recent.innerHTML = "";
-      const three = out.slice(0,3);
-      for(const it of three){
-        if (!it) break;
-        const a = document.createElement("a");
-        a.className = "chip";
-        a.href = it.url || "#";
-        a.target = "_blank";
-        a.rel = "noopener";
-        a.innerHTML = `
-          <img src="${it.image || ""}" alt="">
-          <div class="text">
-            <div class="t">${it.title || ""}</div>
-            <div class="a">${(it.artists||[]).join(", ")}</div>
-          </div>
-        `;
-        el.recent.appendChild(a);
-      }
-      for(let k=three.length;k<3;k++){
-        const ph = document.createElement("div");
-        ph.className = "chip";
-        ph.style.visibility = "hidden";
-        el.recent.appendChild(ph);
-      }
-      lastRenderedKey = key;
+    for(let k=three.length;k<3;k++){
+      const ph = document.createElement("div");
+      ph.className = "chip";
+      ph.style.visibility = "hidden";
+      el.recent.appendChild(ph);
     }
-
-    // 5) Om servern nu innehåller optimistic-låten, stäng av den
-    if (activeOptimistic && base.some(x => x.id === optimistic.id)) {
-      optimistic = null;
-      optimisticUntil = 0;
-    }
+    last3Key = key;
   }
 
   async function pollNow(){
     try {
       const r = await fetch(API_NOW, { cache:"no-store" });
       const data = await r.json();
-
-      // Byt-låt-detektor → skapa optimistic av föregående "now"
-      const oldId = now?.id || null;
-      const newId = data?.id || null;
-      if (now?.playing && oldId && newId && oldId !== newId) {
-        optimistic = {
-          id: now.id,
-          title: now.title,
-          artists: now.artists || [],
-          image: now.image,
-          url: now.url,
-          played_at: new Date().toISOString()
-        };
-        optimisticUntil = Date.now() + 20000; // max 20 s
-      }
-
       now = data;
-      renderNow(now);
+      paintNow(now);
     } catch {}
   }
 
@@ -221,14 +180,11 @@
       const r = await fetch(API_REC + exclude, { cache:"no-store" });
       const data = await r.json();
       const list = Array.isArray(data.items) ? data.items : [];
-      composeAndMaybeRender(list);
-    } catch {
-      // Om fetch failar – rendera inte om, låt senaste layout stå kvar (och optimistic timear ut)
-    }
+      renderRecent(list);
+    } catch {}
   }
 
-  // Minst 1 Hz för now-playing + recent
-  setInterval(pollNow, 1000);
+  setInterval(pollNow, 1000);   // minst 1 Hz
   setInterval(pollRecent, 1000);
   pollNow(); pollRecent();
 </script>
