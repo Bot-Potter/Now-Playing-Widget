@@ -4,7 +4,6 @@ import fetch from "node-fetch";
 import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
-import cookieParser from "cookie-parser";
 import crypto from "crypto";
 import tmi from "tmi.js";
 
@@ -12,7 +11,6 @@ dotenv.config();
 
 const app = express();
 app.use(express.static("public"));
-app.use(cookieParser(process.env.SESSION_SECRET || "secret"));
 app.use(express.json());
 
 const {
@@ -23,10 +21,10 @@ const {
   TWITCH_USERNAME,
   TWITCH_OAUTH_TOKEN,
   TWITCH_CHANNEL,
-  ADMIN_SECRET // för /admin/set-refresh
+  ADMIN_SECRET
 } = process.env;
 
-/* ---------------- Helpers & state ---------------- */
+/* ---------------- Helpers ---------------- */
 const TOKEN_FILE = path.join(process.cwd(), "refresh_token.json");
 const toMs = (iso) => new Date(iso).getTime() || 0;
 const noStore = (res) => {
@@ -34,8 +32,8 @@ const noStore = (res) => {
   res.set("Pragma", "no-cache");
 };
 
-/* ---- Server-side OAuth state (cookie-fritt) ---- */
-const pendingStates = new Map(); // state -> expiresAt (ms)
+/* ---------------- State store för OAuth ---------------- */
+const pendingStates = new Map();
 const STATE_TTL_MS = 10 * 60 * 1000;
 function newState() { return crypto.randomBytes(16).toString("hex"); }
 function addState(st) { pendingStates.set(st, Date.now() + STATE_TTL_MS); }
@@ -50,16 +48,19 @@ setInterval(() => {
   for (const [k, exp] of pendingStates.entries()) if (exp <= now) pendingStates.delete(k);
 }, 60_000);
 
-/* ---- Refresh token hantering ---- */
-let OVERRIDE_REFRESH = null; // kan sättas via /admin/set-refresh
+/* ---------------- Refresh token ---------------- */
+let OVERRIDE_REFRESH = null;
 const loadRefresh = () => {
   if (OVERRIDE_REFRESH) return OVERRIDE_REFRESH;
   if (process.env.REFRESH_TOKEN) return process.env.REFRESH_TOKEN;
   try { return JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8")).refresh_token; } catch { return null; }
 };
 
-/* ---------------- Spotify OAuth (cookie-fritt) ---------------- */
+/* ---------------- Spotify OAuth ---------------- */
 app.get("/login", (req, res) => {
+  if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET || !SPOTIFY_REDIRECT_URI) {
+    return res.status(500).send("Missing Spotify ENV vars");
+  }
   const scopes = [
     "user-read-currently-playing",
     "user-read-playback-state",
@@ -76,24 +77,16 @@ app.get("/login", (req, res) => {
     redirect_uri: SPOTIFY_REDIRECT_URI,
     state
   });
+
   res.redirect("https://accounts.spotify.com/authorize?" + params.toString());
 });
 
 app.get("/callback", async (req, res) => {
   const { code, state, error } = req.query;
 
-  if (error) {
-    res.status(400).send(`<pre>Spotify error: ${String(error)}</pre>`);
-    return;
-  }
-  if (!state || !consumeState(state)) {
-    res.status(400).send(`<pre>State mismatch/expired. Prova igen från /login.</pre>`);
-    return;
-  }
-  if (!code) {
-    res.status(400).send(`<pre>Missing code</pre>`);
-    return;
-  }
+  if (error) return res.status(400).send("Spotify error: " + error);
+  if (!state || !consumeState(state)) return res.status(400).send("State mismatch/expired");
+  if (!code) return res.status(400).send("Missing code");
 
   try {
     const body = new URLSearchParams({
@@ -112,31 +105,28 @@ app.get("/callback", async (req, res) => {
     const text = await r.text();
     let data = null; try { data = JSON.parse(text); } catch {}
     if (!r.ok || !data) {
-      res.status(400).send(`<h3>Token error</h3><pre>${text.slice(0,1000)}</pre>`);
-      return;
+      return res.status(400).send("Token error: " + text);
     }
 
     const rt = data.refresh_token;
     if (!rt) {
-      res.status(400).send(`<h3>Ingen refresh_token i svaret</h3><pre>${text.slice(0,1000)}</pre>`);
-      return;
+      return res.status(400).send("Ingen refresh_token i svaret. Ta bort access i Spotify Account > Apps och prova igen.");
     }
 
     try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ refresh_token: rt }, null, 2)); } catch {}
     res.send(`
       <style>body{font-family:system-ui;padding:24px}</style>
       <h2>Klart!</h2>
-      <p>Kopiera din <b>refresh token</b> och lägg den som <code>REFRESH_TOKEN</code> i Render
-         (eller använd <code>/admin/set-refresh</code> om du har ADMIN_SECRET).</p>
-      <pre style="background:#111;color:#0f0;padding:12px;border-radius:8px;white-space:break-spaces">${rt}</pre>
-      <p>Tips: testa <a href="/whoami" target="_blank">/whoami</a> efter att du satt tokenen.</p>
+      <p>Kopiera refresh tokenen och lägg den som <code>REFRESH_TOKEN</code> i Render (eller använd /admin/set-refresh).</p>
+      <pre style="background:#111;color:#0f0;padding:12px;border-radius:8px">${rt}</pre>
+      <p>Testa sedan <a href="/whoami">/whoami</a></p>
     `);
   } catch (e) {
-    res.status(500).send(`<h3>Exception</h3><pre>${String(e)}</pre>`);
+    res.status(500).send("Callback error: " + e.message);
   }
 });
 
-/* ---------------- Spotify Access Token via refresh ---------------- */
+/* ---------------- Spotify Access Token ---------------- */
 async function getAccessToken() {
   const refresh_token = loadRefresh();
   if (!refresh_token) return null;
@@ -152,76 +142,33 @@ async function getAccessToken() {
   return data.access_token || null;
 }
 
-/* ==========================================================
-   STATE: now + snapshot + optimistic bridge + history buffer
-   ========================================================== */
+/* ---------------- Global state ---------------- */
 let lastNow = { playing: false };
-
-let lastTrackSnapshot = null; // senaste playing:true payload
+let lastTrackSnapshot = null;
 let lastTrackSeenAt = 0;
 const SNAPSHOT_TTL_MS = 2 * 60 * 1000;
-
-let optimisticQueue = []; // {id,title,artists[],image,url,played_at}
+let optimisticQueue = [];
 const OPTIMISTIC_TTL_MS = 30000;
-
-let historyBuffer = [];  // newest-first; unique by id@played_at
+let historyBuffer = [];
 let lastSpotifyCursorMs = 0;
 const HISTORY_MAX = 50;
 
-function pushOptimisticFromNow(nowObj) {
-  if (!nowObj || !nowObj.id) return;
-  optimisticQueue.unshift({
-    id: nowObj.id,
-    title: nowObj.title || "",
-    artists: nowObj.artists || [],
-    image: nowObj.image || "",
-    url: nowObj.url || "",
-    played_at: new Date().toISOString()
-  });
-  const seen = new Set();
-  const nowTs = Date.now();
-  optimisticQueue = optimisticQueue.filter(x => {
-    const fresh = (nowTs - toMs(x.played_at)) < OPTIMISTIC_TTL_MS;
-    const key = x.id;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return fresh;
-  });
-}
-
-function addToHistoryFromApi(items) {
-  items.sort((a,b) => toMs(b.played_at) - toMs(a.played_at));
-  const next = [...items, ...historyBuffer];
-  const seenKey = new Set();
-  const out = [];
-  for (const it of next) {
-    const key = `${it.id}@${it.played_at}`;
-    if (seenKey.has(key)) continue;
-    seenKey.add(key);
-    out.push(it);
-    if (out.length >= HISTORY_MAX) break;
-  }
-  historyBuffer = out.sort((a,b) => toMs(b.played_at) - toMs(a.played_at));
-  const topPlayedAtMs = historyBuffer.length ? toMs(historyBuffer[0].played_at) : 0;
-  if (topPlayedAtMs > lastSpotifyCursorMs) lastSpotifyCursorMs = topPlayedAtMs;
-}
-
-/* ---------------- /now-playing ---------------- */
+/* ---------------- now-playing ---------------- */
 app.get("/now-playing", async (_req, res) => {
   noStore(res);
   try {
     const at = await getAccessToken();
-    if (!at) { lastNow = { playing:false }; return res.json({ playing:false }); }
+    if (!at) return res.json({ playing:false });
 
     const r = await fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track", {
       headers: { Authorization: `Bearer ${at}` }
     });
 
-    if (r.status === 204) { lastNow = { playing:false }; return res.json({ playing:false }); }
-    if (!r.ok) { lastNow = { playing:false }; return res.json({ playing:false }); }
+    if (r.status === 204) return res.json({ playing:false });
+    if (!r.ok) return res.json({ playing:false });
 
     const json = await r.json();
-    if (!json?.is_playing) { lastNow = { playing:false }; return res.json({ playing:false }); }
+    if (!json?.is_playing) return res.json({ playing:false });
 
     const item = json.item || {};
     const img = item.album?.images?.[0]?.url || "";
@@ -238,198 +185,119 @@ app.get("/now-playing", async (_req, res) => {
       duration_ms: item.duration_ms || 0
     };
 
-    // snapshot så overlay kan falla tillbaka
     lastTrackSnapshot = payload;
     lastTrackSeenAt = Date.now();
-
-    if (lastNow?.playing && lastNow?.id && lastNow.id !== payload.id) {
-      pushOptimisticFromNow(lastNow);
-    }
     lastNow = payload;
     res.json(payload);
-  } catch (e) {
-    lastNow = { playing:false };
-    res.json({ playing:false, error:e.message });
+  } catch {
+    res.json({ playing:false });
   }
 });
 
-/* ---------------- /now-snapshot (fallback för overlay) ---------------- */
+/* ---------------- snapshot ---------------- */
 app.get("/now-snapshot", (_req, res) => {
   noStore(res);
   const fresh = lastTrackSnapshot && (Date.now() - lastTrackSeenAt) < SNAPSHOT_TTL_MS;
-  if (fresh) return res.json({ ...lastTrackSnapshot, snapshot: true });
-  return res.json({ playing: false });
+  if (fresh) return res.json({ ...lastTrackSnapshot, snapshot:true });
+  return res.json({ playing:false });
 });
 
-/* ---------------- /recent (smart fetch med after=) ---------------- */
-const RECENT_FETCH_MIN_MS = 1200;
-let lastRecentFetchTs = 0;
-
-async function fetchSpotifyRecent(afterMs) {
-  const at = await getAccessToken();
-  if (!at) return null;
-  const url = new URL("https://api.spotify.com/v1/me/player/recently-played");
-  url.searchParams.set("limit", "50");
-  if (afterMs && Number.isFinite(afterMs) && afterMs > 0) {
-    url.searchParams.set("after", String(afterMs));
-  }
-  const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${at}` } });
-  if (!r.ok) return null;
-  const json = await r.json();
-  const normalized = (json.items || [])
-    .filter(x => x && x.track && x.track.id && x.played_at)
-    .map(it => ({
-      id: it.track.id,
-      title: it.track.name || "",
-      artists: (it.track.artists || []).map(a => a.name),
-      image: it.track.album?.images?.[0]?.url || "",
-      url: it.track.external_urls?.spotify || "",
-      played_at: it.played_at
-    }));
-  return normalized;
-}
-
+/* ---------------- recent ---------------- */
 app.get("/recent", async (req, res) => {
   noStore(res);
   const excludeId = (req.query.exclude_id || "").trim() || null;
   try {
-    const now = Date.now();
-    if (now - lastRecentFetchTs >= RECENT_FETCH_MIN_MS) {
-      lastRecentFetchTs = now;
-      const pack = await fetchSpotifyRecent(lastSpotifyCursorMs);
-      if (pack) addToHistoryFromApi(pack);
-    }
-    const nowTs = Date.now();
-    const freshOptimistic = optimisticQueue.filter(o => (nowTs - toMs(o.played_at)) < OPTIMISTIC_TTL_MS);
-    const merged = [...freshOptimistic, ...historyBuffer]
-      .filter(x => (excludeId ? x.id !== excludeId : true))
-      .sort((a,b) => toMs(b.played_at) - toMs(a.played_at));
-    const seen = new Set(); const out = [];
-    for (const it of merged) {
-      if (seen.has(it.id)) continue;
-      seen.add(it.id);
-      out.push(it);
-      if (out.length >= 3) break;
-    }
-    return res.json({ items: out });
+    const at = await getAccessToken();
+    if (!at) return res.json({ items:[] });
+
+    const url = new URL("https://api.spotify.com/v1/me/player/recently-played");
+    url.searchParams.set("limit","10");
+    const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${at}` } });
+    if (!r.ok) return res.json({ items:[] });
+    const json = await r.json();
+
+    const items = (json.items||[]).map(it=>({
+      id: it.track.id,
+      title: it.track.name,
+      artists: it.track.artists.map(a=>a.name),
+      image: it.track.album?.images?.[0]?.url || "",
+      url: it.track.external_urls?.spotify || "",
+      played_at: it.played_at
+    }));
+
+    const out = excludeId ? items.filter(x=>x.id !== excludeId) : items;
+    res.json({ items: out.slice(0,3) });
   } catch {
-    return res.json({ items: [] });
+    res.json({ items:[] });
   }
 });
 
-/* ---------------- SSE för overlay ---------------- */
+/* ---------------- SSE ---------------- */
 const sseClients = new Set();
-app.get("/events", (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Connection", "keep-alive");
+app.get("/events", (req,res)=>{
+  res.setHeader("Content-Type","text/event-stream");
+  res.setHeader("Cache-Control","no-store");
+  res.setHeader("Connection","keep-alive");
   res.flushHeaders?.();
   res.write(`: connected\n\n`);
   sseClients.add(res);
-  const keep = setInterval(() => {
-    if (res.writableEnded) return clearInterval(keep);
-    res.write(`: ping ${Date.now()}\n\n`);
-  }, 15000);
-  req.on("close", () => { clearInterval(keep); sseClients.delete(res); });
+  req.on("close",()=>sseClients.delete(res));
 });
-function broadcastSSE(type, payload) {
+function broadcastSSE(type,payload){
   const data = `event: ${type}\n` + `data: ${JSON.stringify(payload)}\n\n`;
-  for (const client of sseClients) {
-    if (!client.writableEnded) client.write(data);
-  }
+  for (const c of sseClients) if (!c.writableEnded) c.write(data);
 }
 
-/* ---------------- Twitch listener (tmi.js) ---------------- */
+/* ---------------- Twitch listener ---------------- */
 if (TWITCH_USERNAME && TWITCH_OAUTH_TOKEN && TWITCH_CHANNEL) {
   const tmiClient = new tmi.Client({
-    identity: { username: TWITCH_USERNAME, password: TWITCH_OAUTH_TOKEN },
-    channels: [ TWITCH_CHANNEL ]
+    identity:{ username:TWITCH_USERNAME, password:TWITCH_OAUTH_TOKEN },
+    channels:[TWITCH_CHANNEL]
   });
-  tmiClient.connect().then(() =>
-    console.log(`[tmi] Connected to #${TWITCH_CHANNEL}`)
-  ).catch(err => console.error("[tmi] connect error", err));
-
+  tmiClient.connect().then(()=>console.log(`[tmi] Connected to #${TWITCH_CHANNEL}`));
   const SONG_CMD = /^(?:!song|!låt)\b/i;
-  tmiClient.on("message", (_channel, userstate, message, self) => {
-    if (self) return;
-    if (SONG_CMD.test(message)) {
-      const by = userstate["display-name"] || userstate.username || "someone";
-      broadcastSSE("song", { by, at: Date.now() });
+  tmiClient.on("message",(_ch,u,m,self)=>{
+    if(self) return;
+    if(SONG_CMD.test(m)){
+      const by = u["display-name"]||u.username||"someone";
+      broadcastSSE("song",{by,at:Date.now()});
       console.log(`[tmi] !song by ${by}`);
     }
   });
-} else {
-  console.warn("[tmi] Twitch vars missing, skipping chat listener");
 }
 
-/* ---------------- Admin & Debug ---------------- */
-app.get("/env-check", (_req, res) => {
+/* ---------------- Admin/debug ---------------- */
+app.get("/env-check",(_req,res)=>{
   const fromEnv = !!process.env.REFRESH_TOKEN;
-  const len = process.env.REFRESH_TOKEN ? process.env.REFRESH_TOKEN.length : 0;
-  res.json({ has_env_refresh: fromEnv, env_refresh_len: len, has_override: !!OVERRIDE_REFRESH });
+  res.json({ has_env_refresh:fromEnv, len:process.env.REFRESH_TOKEN?.length||0, has_override:!!OVERRIDE_REFRESH });
 });
 
-app.get("/whoami", async (_req, res) => {
+app.get("/whoami", async (_req,res)=>{
   noStore(res);
   try {
     const at = await getAccessToken();
-    if (!at) return res.status(400).json({ ok:false, error:"no_access_token" });
-
-    const r = await fetch("https://api.spotify.com/v1/me", {
-      headers: { Authorization: `Bearer ${at}` }
-    });
-
-    const ct = r.headers.get("content-type") || "";
-    const bodyText = await r.text();
-    let bodyJson = null;
-    try { bodyJson = JSON.parse(bodyText); } catch {}
-
-    if (!r.ok) {
-      return res.status(r.status).json({
-        ok:false,
-        status:r.status,
-        content_type: ct,
-        error: bodyJson || bodyText.slice(0,200)
-      });
-    }
-
-    if (bodyJson) {
-      return res.json({
-        ok:true,
-        id: bodyJson.id,
-        display_name: bodyJson.display_name,
-        product: bodyJson.product,
-        country: bodyJson.country
-      });
-    } else {
-      return res.json({
-        ok:false,
-        status:r.status,
-        content_type: ct,
-        error: "non_json_response",
-        snippet: bodyText.slice(0,200)
-      });
-    }
-  } catch (e) {
-    return res.status(500).json({ ok:false, error:String(e) });
+    if (!at) return res.json({ ok:false, error:"no_access_token" });
+    const r = await fetch("https://api.spotify.com/v1/me",{headers:{Authorization:`Bearer ${at}`}});
+    const text = await r.text();
+    let data=null; try{data=JSON.parse(text);}catch{}
+    if(!r.ok) return res.json({ ok:false, status:r.status, body:text.slice(0,200) });
+    if(!data) return res.json({ ok:false, error:"non_json", snippet:text.slice(0,200) });
+    res.json({ ok:true, id:data.id, display_name:data.display_name, product:data.product, country:data.country });
+  } catch(e) {
+    res.json({ ok:false, error:String(e) });
   }
 });
 
-app.post("/admin/set-refresh", express.text({ type: "*/*" }), (req, res) => {
-  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
-    return res.status(401).send("unauthorized");
-  }
-  const rt = (req.body || "").trim();
-  if (!rt) return res.status(400).send("missing token");
+app.post("/admin/set-refresh", express.text({type:"*/*"}), (req,res)=>{
+  if(!ADMIN_SECRET || req.headers["x-admin-secret"]!==ADMIN_SECRET) return res.status(401).send("unauthorized");
+  const rt = (req.body||"").trim();
+  if(!rt) return res.status(400).send("missing token");
   OVERRIDE_REFRESH = rt;
-  console.log("[admin] REFRESH_TOKEN override set (len=%d)", rt.length);
+  console.log("[admin] REFRESH_TOKEN override set len=%d", rt.length);
   res.send("ok");
 });
 
 /* ---------------- Health ---------------- */
-app.get("/healthz", (_req, res) => res.send("ok"));
+app.get("/healthz",(_req,res)=>res.send("ok"));
 
-app.listen(PORT, () => {
-  console.log("Listening on :" + PORT);
-  console.log("ENV REFRESH_TOKEN length:", process.env.REFRESH_TOKEN ? process.env.REFRESH_TOKEN.length : 0);
-});
+app.listen(PORT,()=>console.log("Listening on :"+PORT));
