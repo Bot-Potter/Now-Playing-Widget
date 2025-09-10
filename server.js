@@ -21,17 +21,17 @@ const {
 
 const TOKEN_FILE = path.join(process.cwd(), "refresh_token.json");
 
-/* ---------- helpers ---------- */
+/* ---------- Helpers ---------- */
 const getState = () => crypto.randomBytes(16).toString("hex");
 const saveLocalRefresh = (rt) => { try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ refresh_token: rt }, null, 2)); } catch {} };
 const loadRefresh = () => {
   if (process.env.REFRESH_TOKEN) return process.env.REFRESH_TOKEN;
   try { return JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8")).refresh_token; } catch { return null; }
 };
-const noStore = (res) => {
+function noStore(res) {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   res.set("Pragma", "no-cache");
-};
+}
 
 /* ---------- OAuth ---------- */
 app.get("/login", (req, res) => {
@@ -102,102 +102,123 @@ async function getAccessToken() {
   return data.access_token || null;
 }
 
-/* ---------- En samlad endpoint: /deck ---------- */
-/* Returnerar:
-   {
-     now: { playing:false } ELLER { playing:true, id,title,artists[],album,url,image,progress_ms,duration_ms,type }
-     recent: [ {id,title,artists[],url,image,played_at}, ... max 3 ]
-   }
-*/
-const DECK_CACHE_MS = 2500;
-let deckCache = { ts: 0, payload: { now: { playing: false }, recent: [] } };
-
-app.get("/deck", async (_req, res) => {
+/* ---------- /now-playing (ingen cache) ---------- */
+app.get("/now-playing", async (_req, res) => {
   noStore(res);
-  const nowTs = Date.now();
-  if (nowTs - deckCache.ts < DECK_CACHE_MS) {
-    return res.json(deckCache.payload);
-  }
-
   try {
     const at = await getAccessToken();
-    if (!at) {
-      deckCache = { ts: nowTs, payload: { now: { playing: false, message: "Ingen användare kopplad." }, recent: [] } };
-      return res.json(deckCache.payload);
-    }
+    if (!at) return res.json({ playing: false, message: "Ingen användare kopplad än." });
 
-    // Hämta båda parallellt
-    const [nowResp, recentResp] = await Promise.all([
-      fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track,episode", {
-        headers: { Authorization: `Bearer ${at}` }
-      }),
-      fetch("https://api.spotify.com/v1/me/player/recently-played?limit=25", {
-        headers: { Authorization: `Bearer ${at}` }
-      })
-    ]);
+    const r = await fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track,episode", {
+      headers: { Authorization: `Bearer ${at}` }
+    });
 
-    // NOW
-    let nowPayload = { playing: false };
-    if (nowResp.status !== 204 && nowResp.ok) {
-      const nowJson = await nowResp.json();
-      if (nowJson?.is_playing) {
-        const isEpisode = nowJson.currently_playing_type === "episode";
-        const item = nowJson.item || {};
-        const img = (isEpisode ? item.images : item.album?.images)?.[0]?.url || "";
-        nowPayload = {
-          playing: true,
-          type: isEpisode ? "episode" : "track",
-          id: item.id || "",
-          title: item.name || "",
-          artists: isEpisode ? (item.show?.publisher ? [item.show.publisher] : []) : (item.artists?.map(a => a.name) || []),
-          album: isEpisode ? (item.show?.name || "") : (item.album?.name || ""),
-          url: item.external_urls?.spotify || "",
-          image: img,
-          progress_ms: nowJson.progress_ms || 0,
-          duration_ms: item.duration_ms || 0
-        };
-      }
-    }
+    if (r.status === 204) return res.json({ playing: false });
+    if (!r.ok) return res.json({ playing: false });
 
-    // RECENT
-    let recentItems = [];
-    if (recentResp.ok) {
-      const recentJson = await recentResp.json();
+    const json = await r.json();
+    if (!json?.is_playing) return res.json({ playing: false });
 
-      // Spotify returnerar i fallande order på played_at redan – men vi säkerhets-sorterar
-      const items = (recentJson.items || [])
-        .filter(x => x && x.track && x.track.id)
-        .sort((a, b) => new Date(b.played_at) - new Date(a.played_at));
+    const isEpisode = json.currently_playing_type === "episode";
+    const item = json.item || {};
+    const img = (isEpisode ? item.images : item.album?.images)?.[0]?.url || "";
 
-      const seen = new Set();
-      for (const it of items) {
-        const track = it.track;
-        const id = track.id;
-        if (seen.has(id)) continue;
-        seen.add(id);
-
-        // Skippa låten som spelas just nu (om det är samma track-id)
-        if (nowPayload.playing && nowPayload.type === "track" && id === nowPayload.id) continue;
-
-        recentItems.push({
-          id,
-          title: track.name || "",
-          artists: (track.artists || []).map(a => a.name),
-          image: track.album?.images?.[0]?.url || "",
-          url: track.external_urls?.spotify || "",
-          played_at: it.played_at
-        });
-
-        if (recentItems.length >= 3) break;
-      }
-    }
-
-    const payload = { now: nowPayload, recent: recentItems };
-    deckCache = { ts: nowTs, payload };
-    res.json(payload);
+    res.json({
+      playing: true,
+      type: isEpisode ? "episode" : "track",
+      id: item.id || "",
+      title: item.name || "",
+      artists: isEpisode ? (item.show?.publisher ? [item.show.publisher] : []) : (item.artists?.map(a => a.name) || []),
+      album: isEpisode ? (item.show?.name || "") : (item.album?.name || ""),
+      url: item.external_urls?.spotify || "",
+      image: img,
+      progress_ms: json.progress_ms || 0,
+      duration_ms: item.duration_ms || 0
+    });
   } catch (e) {
-    // vid fel – skicka senaste kända cache
-    return res.json(deckCache.payload);
+    res.json({ playing: false, error: e.message });
+  }
+});
+
+/* ---------- /recent (server-cache 3s, sort, dedupe, exclude_id) ---------- */
+const RECENT_CACHE_MS = 3000;
+let recentCache = { ts: 0, raw: null, payload: { items: [], etag: "" } };
+
+function buildRecentPayload(json, excludeId = null) {
+  const items = (json?.items || [])
+    .filter(x => x && x.track && x.track.id && x.played_at)
+    .sort((a, b) => new Date(b.played_at) - new Date(a.played_at));
+
+  const seen = new Set();
+  const out = [];
+
+  for (const it of items) {
+    const tr = it.track;
+    const id = tr.id;
+    if (excludeId && id === excludeId) continue;      // filtrera bort nu-spelas
+    if (seen.has(id)) continue;                        // dedupe på track.id
+    seen.add(id);
+
+    out.push({
+      id,
+      title: tr.name || "",
+      artists: (tr.artists || []).map(a => a.name),
+      image: tr.album?.images?.[0]?.url || "",
+      url: tr.external_urls?.spotify || "",
+      played_at: it.played_at
+    });
+    if (out.length >= 6) break; // ge fronten slack
+  }
+
+  const top3 = out.slice(0, 3);
+  const etag = crypto
+    .createHash("sha1")
+    .update(top3.map(x => `${x.id}@${x.played_at}`).join("|"))
+    .digest("hex");
+
+  return { items: out, etag };
+}
+
+app.get("/recent", async (req, res) => {
+  noStore(res);
+  try {
+    const excludeId = (req.query.exclude_id || "").trim() || null;
+    const now = Date.now();
+
+    const at = await getAccessToken();
+    if (!at) return res.json({ items: [], etag: "", error: "no_token" });
+
+    // använd cache om färsk
+    if (now - recentCache.ts < RECENT_CACHE_MS && recentCache.raw) {
+      const payload = buildRecentPayload(recentCache.raw, excludeId);
+      return res.json(payload);
+    }
+
+    const r = await fetch("https://api.spotify.com/v1/me/player/recently-played?limit=25", {
+      headers: { Authorization: `Bearer ${at}` }
+    });
+
+    if (r.status === 429) {
+      // throttling: använd senaste kända raw om finns
+      if (recentCache.raw) {
+        const payload = buildRecentPayload(recentCache.raw, excludeId);
+        return res.json(payload);
+      }
+      return res.json({ items: [], etag: "", error: "spotify_429" });
+    }
+
+    if (!r.ok) {
+      const txt = await r.text().catch(() => "");
+      return res.json({ items: [], etag: "", error: `spotify_${r.status}`, detail: txt });
+    }
+
+    const json = await r.json();
+    recentCache = { ts: now, raw: json, payload: { items: [], etag: "" } };
+
+    const payload = buildRecentPayload(json, excludeId);
+    return res.json(payload);
+  } catch (e) {
+    return res.json({ items: [], etag: "", error: "server_error", detail: e.message });
   }
 });
 
