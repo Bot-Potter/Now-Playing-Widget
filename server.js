@@ -15,7 +15,6 @@ const {
   SPOTIFY_CLIENT_ID,
   SPOTIFY_CLIENT_SECRET,
   SPOTIFY_REDIRECT_URI,
-  REFRESH_TOKEN,
   PORT = process.env.PORT || 3000
 } = process.env;
 
@@ -140,11 +139,11 @@ app.get("/now-playing", async (_req, res) => {
   }
 });
 
-/* ---------- /recent (server-cache 3s, sort, dedupe, exclude_id) ---------- */
-const RECENT_CACHE_MS = 3000;
-let recentCache = { ts: 0, raw: null, payload: { items: [], etag: "" } };
+/* ---------- /recent (cache 1s, exclude_id, sträng ordning) ---------- */
+const RECENT_CACHE_MS = 1000;
+let recentCache = { ts: 0, raw: null };
 
-function buildRecentPayload(json, excludeId = null) {
+function buildRecent(json, excludeId = null) {
   const items = (json?.items || [])
     .filter(x => x && x.track && x.track.id && x.played_at)
     .sort((a, b) => new Date(b.played_at) - new Date(a.played_at));
@@ -155,8 +154,8 @@ function buildRecentPayload(json, excludeId = null) {
   for (const it of items) {
     const tr = it.track;
     const id = tr.id;
-    if (excludeId && id === excludeId) continue;      // filtrera bort nu-spelas
-    if (seen.has(id)) continue;                        // dedupe på track.id
+    if (excludeId && id === excludeId) continue;     // exkludera nu-spelas
+    if (seen.has(id)) continue;                      // dedupe
     seen.add(id);
 
     out.push({
@@ -167,16 +166,10 @@ function buildRecentPayload(json, excludeId = null) {
       url: tr.external_urls?.spotify || "",
       played_at: it.played_at
     });
-    if (out.length >= 6) break; // ge fronten slack
+
+    if (out.length >= 3) break; // vi skickar exakt topp 3
   }
-
-  const top3 = out.slice(0, 3);
-  const etag = crypto
-    .createHash("sha1")
-    .update(top3.map(x => `${x.id}@${x.played_at}`).join("|"))
-    .digest("hex");
-
-  return { items: out, etag };
+  return out;
 }
 
 app.get("/recent", async (req, res) => {
@@ -186,39 +179,30 @@ app.get("/recent", async (req, res) => {
     const now = Date.now();
 
     const at = await getAccessToken();
-    if (!at) return res.json({ items: [], etag: "", error: "no_token" });
+    if (!at) return res.json({ items: [] });
 
-    // använd cache om färsk
-    if (now - recentCache.ts < RECENT_CACHE_MS && recentCache.raw) {
-      const payload = buildRecentPayload(recentCache.raw, excludeId);
-      return res.json(payload);
-    }
+    // cache 1s
+    if (now - recentCache.ts > RECENT_CACHE_MS) {
+      const r = await fetch("https://api.spotify.com/v1/me/player/recently-played?limit=25", {
+        headers: { Authorization: `Bearer ${at}` }
+      });
 
-    const r = await fetch("https://api.spotify.com/v1/me/player/recently-played?limit=25", {
-      headers: { Authorization: `Bearer ${at}` }
-    });
-
-    if (r.status === 429) {
-      // throttling: använd senaste kända raw om finns
-      if (recentCache.raw) {
-        const payload = buildRecentPayload(recentCache.raw, excludeId);
-        return res.json(payload);
+      if (r.status === 429) {
+        // throttling: använd gammal raw om vi har en
+        if (!recentCache.raw) return res.json({ items: [] });
+      } else if (r.ok) {
+        recentCache.raw = await r.json();
+        recentCache.ts = now;
+      } else {
+        // annat fel → använd rå cache om finns
+        if (!recentCache.raw) return res.json({ items: [] });
       }
-      return res.json({ items: [], etag: "", error: "spotify_429" });
     }
 
-    if (!r.ok) {
-      const txt = await r.text().catch(() => "");
-      return res.json({ items: [], etag: "", error: `spotify_${r.status}`, detail: txt });
-    }
-
-    const json = await r.json();
-    recentCache = { ts: now, raw: json, payload: { items: [], etag: "" } };
-
-    const payload = buildRecentPayload(json, excludeId);
-    return res.json(payload);
+    const list = buildRecent(recentCache.raw, excludeId);
+    return res.json({ items: list });
   } catch (e) {
-    return res.json({ items: [], etag: "", error: "server_error", detail: e.message });
+    return res.json({ items: [] });
   }
 });
 
