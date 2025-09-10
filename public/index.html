@@ -48,7 +48,8 @@
     cover:document.getElementById("cover"), title:document.getElementById("title"), artist:document.getElementById("artist"),
     tStart:document.getElementById("tStart"), tEnd:document.getElementById("tEnd"), bar:document.getElementById("bar")
   };
-  let last=null, ticker;
+  let last=null;
+
   const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
   function paint(d){
     if(!d||!d.playing){ el.content.hidden=true; el.empty.hidden=false; el.bg.style.backgroundImage=""; return; }
@@ -60,9 +61,18 @@
     el.bar.style.width=(100*p/t)+"%";
     if(d.image){ el.cover.src=d.image; el.bg.style.backgroundImage=`url("${d.image}")`; }
   }
-  async function poll(){ try{ const r=await fetch(API,{cache:"no-store"}); last=await r.json(); paint(last);}catch{} }
-  function start(){ clearInterval(ticker); ticker=setInterval(()=>{ if(!last?.playing) return; last.progress_ms=Math.min((last.progress_ms||0)+1000,last.duration_ms||0); paint(last); },1000); }
-  poll().then(start); setInterval(poll,10000);
+
+  async function poll(){ 
+    try{ 
+      const r=await fetch(API,{cache:"no-store"}); 
+      last=await r.json(); 
+      paint(last);
+    }catch(e){ console.warn("Poll error", e); }
+  }
+
+  // Hämta från servern varje sekund
+  setInterval(poll, 1000);
+  poll();
 </script>
 </body>
 </html>
