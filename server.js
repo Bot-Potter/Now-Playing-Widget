@@ -65,7 +65,9 @@ const loadRefresh = () => {
 };
 
 /* ---------------- Spotify OAuth ---------------- */
-app.get("/login", (req, res) => {
+let lastGrantedScopes = []; // för /scopes-insyn
+
+app.get("/login", (_req, res) => {
   if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET || !SPOTIFY_REDIRECT_URI) {
     return res.status(500).send("Missing Spotify ENV vars");
   }
@@ -114,17 +116,37 @@ app.get("/callback", async (req, res) => {
     if (!r.ok || !data) return res.status(400).send("Token error: " + text);
 
     const rt = data.refresh_token;
+    const granted = (data.scope || "").split(/\s+/).filter(Boolean);
+    lastGrantedScopes = granted;
+
+    const needed = [
+      "user-read-currently-playing",
+      "user-read-playback-state",
+      "user-read-recently-played"
+    ];
+    const missing = needed.filter(s => !granted.includes(s));
+
     if (!rt) {
       return res.status(400).send("Ingen refresh_token i svaret. Ta bort access i Spotify Account > Apps och prova igen.");
     }
 
     try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ refresh_token: rt }, null, 2)); } catch {}
+
+    console.log("[callback] granted scopes:", granted.join(" "));
+    if (missing.length) console.warn("[callback] missing scopes:", missing.join(" "));
+
     res.send(`
-      <style>body{font-family:system-ui;padding:24px}</style>
+      <style>body{font-family:system-ui;padding:24px;line-height:1.45}</style>
       <h2>Klart!</h2>
-      <p>Kopiera refresh tokenen och lägg den som <code>REFRESH_TOKEN</code> i Render (eller använd /admin/set-refresh).</p>
-      <pre style="background:#111;color:#0f0;padding:12px;border-radius:8px">${rt}</pre>
-      <p>Testa sedan <a href="/whoami">/whoami</a></p>
+      <p><b>Scopes beviljade:</b><br><code>${granted.join(" ") || "(inga)"}</code></p>
+      ${missing.length ? `
+        <p style="color:#c00"><b>Saknas:</b> <code>${missing.join(" ")}</code></p>
+        <p>Gå till <a href="https://www.spotify.com/account/apps/" target="_blank" rel="noopener">Spotify Account → Apps</a>,
+           “Remove Access” för din app, och kör <code>/login</code> igen så du får prompten och kan godkänna alla scopes.</p>
+      ` : `<p style="color:#0a0"><b>Allt ok – alla nödvändiga scopes finns.</b></p>`}
+      <h3>Refresh token</h3>
+      <pre style="background:#111;color:#0f0;padding:12px;border-radius:8px;white-space:pre-wrap">${rt}</pre>
+      <p>Testa: <a href="/whoami">/whoami</a> • <a href="/recent/debug">/recent/debug</a></p>
     `);
   } catch (e) {
     res.status(500).send("Callback error: " + e.message);
@@ -161,7 +183,7 @@ app.get("/now-playing", async (_req, res) => {
     const at = await getAccessToken();
     if (!at) return res.json({ playing:false });
 
-    // Obs: “Currently Playing” kan ge 204 No Content ibland; hantera som “inget spelas”. :contentReference[oaicite:1]{index=1}
+    // Obs: “Currently Playing” kan ge 204 No Content ibland. (Känd grej.) :contentReference[oaicite:2]{index=2}
     const r = await fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track", {
       headers: { Authorization: `Bearer ${at}` }
     });
@@ -206,8 +228,8 @@ app.get("/now-snapshot", (_req, res) => {
 /* ==========================================================
    RECENT (enkel & korrekt)
    - Hämtar alltid senaste N (RECENT_LIMIT, default 10) från Spotify
-   - Sorterar på played_at desc (för säkerhets skull)
-   - Ingen optimistic/merge/dedupe; vi visar “sanningen” från Spotify
+   - Sorterar på played_at desc (säkerhet)
+   - Ingen optimistic/merge: vi visar sanningen från Spotify
    - Respekterar 429 Retry-After och serverar cache under backoff
    ========================================================== */
 let recentCache = { items: [], updatedAt: 0 };
@@ -230,12 +252,12 @@ app.get("/recent", async (req, res) => {
   const excludeId = (req.query.exclude_id || "").trim() || null;
   const now = Date.now();
 
-  // Under backoff (429) → svara cache
+  // Under backoff → svara cache
   if (now < recentBackoffUntil && recentCache.items.length) {
     const out = recentCache.items
       .filter(x => (excludeId ? x.id !== excludeId : true))
       .slice(0, 3);
-    return res.json({ items: out });
+    return res.json({ items: out, backoff_until: recentBackoffUntil });
   }
 
   try {
@@ -248,49 +270,75 @@ app.get("/recent", async (req, res) => {
     }
 
     const url = new URL("https://api.spotify.com/v1/me/player/recently-played");
-    // Officiell limit: 1..50 (vi tar ex. 10 för att vara snälla). :contentReference[oaicite:2]{index=2}
+    // Officiell limit: 1..50. :contentReference[oaicite:3]{index=3}
     const lim = Math.min(50, Math.max(1, parseInt(RECENT_LIMIT, 10) || 10));
     url.searchParams.set("limit", String(lim));
 
     const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${at}` } });
 
-    // Ratelimit: vänta enligt Retry-After (sekunder) och serva cache under tiden. :contentReference[oaicite:3]{index=3}
+    // Rate limit: 429 + Retry-After. :contentReference[oaicite:4]{index=4}
     if (r.status === 429) {
       const ra = Number(r.headers.get("retry-after") || 2);
       recentBackoffUntil = now + ra * 1000;
+      console.warn("[recent] 429 rate-limited. Retry-After(s) =", ra);
       const out = recentCache.items
         .filter(x => (excludeId ? x.id !== excludeId : true))
         .slice(0, 3);
-      return res.json({ items: out });
+      return res.json({ items: out, backoff_until: recentBackoffUntil, retry_after: ra });
     }
 
     if (!r.ok) {
+      const body = await r.text();
+      console.warn("[recent] non-200:", r.status, body.slice(0,200));
       const out = recentCache.items
         .filter(x => (excludeId ? x.id !== excludeId : true))
         .slice(0, 3);
-      return res.json({ items: out });
+      return res.json({ items: out, status:r.status });
     }
 
     const json = await r.json();
-
-    // Sortera på played_at desc (Spotify returnerar i praktiken nyast först, men vi säkrar ordningen)
     const mapped = mapRecentItems(json)
       .sort((a, b) => toMs(b.played_at) - toMs(a.played_at));
 
-    // Uppdatera cache
     recentCache = { items: mapped, updatedAt: now };
 
-    // Skicka topp 3, med ev. exclude_id
     const out = mapped
       .filter(x => (excludeId ? x.id !== excludeId : true))
       .slice(0, 3);
 
     res.json({ items: out });
   } catch (e) {
+    console.error("[recent] exception", e);
     const out = recentCache.items
       .filter(x => (excludeId ? x.id !== excludeId : true))
       .slice(0, 3);
     res.json({ items: out, error: String(e) });
+  }
+});
+
+/* ---------------- /recent/debug (rå felsökning) ---------------- */
+app.get("/recent/debug", async (_req, res) => {
+  noStore(res);
+  try{
+    const at = await getAccessToken();
+    if(!at) return res.status(400).json({ok:false, error:"no_access_token"});
+
+    const url = new URL("https://api.spotify.com/v1/me/player/recently-played");
+    url.searchParams.set("limit", "10");
+    const r = await fetch(url.toString(), { headers:{ Authorization:`Bearer ${at}` } });
+
+    const bodyText = await r.text();
+    let json=null; try{ json=JSON.parse(bodyText) }catch{}
+
+    res.json({
+      ok: r.ok,
+      status: r.status,
+      retry_after: r.headers.get("retry-after"),
+      content_type: r.headers.get("content-type"),
+      body: json ?? bodyText.slice(0,5000)
+    });
+  }catch(e){
+    res.status(500).json({ok:false, error:String(e)});
   }
 });
 
@@ -390,6 +438,18 @@ app.get("/whoami", async (_req, res) => {
   } catch (e) {
     return res.status(500).json({ ok:false, error:String(e) });
   }
+});
+
+// En enkel översikt över vilka scopes som senast beviljades (från /callback)
+app.get("/scopes", (_req, res) => {
+  res.json({
+    required: [
+      "user-read-currently-playing",
+      "user-read-playback-state",
+      "user-read-recently-played"
+    ],
+    granted: lastGrantedScopes
+  });
 });
 
 app.post("/admin/set-refresh", express.text({ type: "*/*" }), (req, res) => {
