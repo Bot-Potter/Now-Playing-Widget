@@ -45,6 +45,15 @@
   .chip .t{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .chip .a{font-size:12px;color:#d7c7df;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.95}
 
+  /* enkel skeleton när vi väntar */
+  .skeleton{position:relative;overflow:hidden}
+  .skeleton::after{
+    content:""; position:absolute; inset:0;
+    background:linear-gradient(90deg, rgba(255,255,255,.06), rgba(255,255,255,.12), rgba(255,255,255,.06));
+    animation:shimmer 1.2s infinite; opacity:.35
+  }
+  @keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+
   @media (max-width:560px){ .recent{grid-template-columns:repeat(2, minmax(0, 1fr))} }
 </style>
 </head>
@@ -98,18 +107,14 @@
   }
   const setAccent=c=>document.documentElement.style.setProperty("--accent",c);
 
-  // ===== Now Playing (oförändrat)
-  async function pollNow(){
-    try{
-      const r=await fetch(API_NOW,{cache:"no-store"});
-      const d=await r.json();
-      paintNow(d);
-    }catch{}
-  }
+  let prevNowId = null;         // senaste track-id vi sett
+  let recCtl = null;            // AbortController för /recent
+  let lastRecentKey = "";       // "id@played|id@played|id@played" för stabil diff
+
   function paintNow(d){
     if(!d||!d.playing){
-      el.content.hidden=true; el.empty.hidden=false;
-      el.bg.style.backgroundImage=""; el.cardLink.href="#"; return;
+      el.content.hidden=true; el.empty.hidden=false; el.bg.style.backgroundImage=""; el.cardLink.href="#";
+      return;
     }
     el.content.hidden=false; el.empty.hidden=true;
     el.title.textContent=d.title||"Okänd låt";
@@ -118,37 +123,29 @@
     el.tStart.textContent=ms(p); el.tEnd.textContent=ms(t);
     el.bar.style.width=(100*p/t)+"%";
     if(d.image){ el.cover.src=d.image; el.bg.style.backgroundImage=`url("${d.image}")`; dominantColorFromURL(d.image).then(setAccent); }
-    el.cardLink.href=d.url||"#";
+    el.cardLink.href = d.url || "#";
   }
 
-  // ===== Recent (superenkel & robust)
-  let recInFlight = false;        // undvik overlap
-  let lastKey = "";               // "id@played|id@played|id@played"
-  function makeKey(items){ return items.map(x=>`${x.id||"-"}@${x.played_at||"-"}`).join("|"); }
-
-  async function pollRecent(){
-    if(recInFlight) return;
-    recInFlight = true;
-    try{
-      const qs = window.__nowId ? `?exclude_id=${encodeURIComponent(window.__nowId)}` : "";
-      const r = await fetch(API_REC+qs, { cache:"no-store" });
-      const j = await r.json();
-      const items = Array.isArray(j.items) ? j.items.slice(0,3) : [];
-
-      // nyckel baserat på id@played_at → uppdatera endast vid verklig ändring
-      const key = makeKey(items);
-      if (key !== lastKey) {
-        renderRecent(items);
-        lastKey = key;
-      }
-    }catch{} finally{
-      recInFlight = false;
+  function clearRecentSkeleton(){
+    el.recent.innerHTML="";
+    for(let i=0;i<3;i++){
+      const ph=document.createElement("div");
+      ph.className="chip skeleton"; // liten shimmer medan vi hämtar
+      ph.innerHTML=`<img alt=""><div class="text"><div class="t"> </div><div class="a"> </div></div>`;
+      el.recent.appendChild(ph);
     }
+    lastRecentKey = ""; // tvinga nästa render att skriva om
   }
 
   function renderRecent(items){
-    el.recent.innerHTML = "";
-    for(const it of items){
+    // Bygg nyckel på id@played_at (ordning betyder något)
+    const key = items.map(x=>`${x.id||"-"}@${x.played_at||"-"}`).slice(0,3).join("|");
+    if(key===lastRecentKey) return;
+    lastRecentKey = key;
+
+    el.recent.innerHTML="";
+    const three = items.slice(0,3);
+    for(const it of three){
       const a=document.createElement("a");
       a.className="chip"; a.href=it.url||"#"; a.target="_blank"; a.rel="noopener";
       a.innerHTML = `
@@ -159,26 +156,49 @@
         </div>`;
       el.recent.appendChild(a);
     }
-    for(let k=items.length;k<3;k++){
-      const ph=document.createElement("div"); ph.className="chip"; ph.style.visibility="hidden";
-      el.recent.appendChild(ph);
+    for(let k=three.length;k<3;k++){
+      const ph=document.createElement("div"); ph.className="chip"; ph.style.visibility="hidden"; el.recent.appendChild(ph);
     }
   }
 
-  // Håll "now id" i en global för exclude-parametern (enkelt, utan kopplingslogik)
-  async function pollNowWithId(){
+  async function fetchRecentFor(nowId){
     try{
-      const r=await fetch(API_NOW,{cache:"no-store"});
-      const d=await r.json();
-      window.__nowId = d && d.playing ? d.id : null;
-      paintNow(d);
+      if(recCtl) recCtl.abort();
+      recCtl = new AbortController();
+      const qs = nowId ? `?exclude_id=${encodeURIComponent(nowId)}` : "";
+      const r = await fetch(API_REC+qs,{cache:"no-store", signal:recCtl.signal});
+      const j = await r.json();
+      const items = Array.isArray(j.items)? j.items : [];
+      renderRecent(items);
     }catch{}
   }
 
-  // Start polling
-  pollNowWithId(); pollRecent();
-  setInterval(pollNowWithId, 1000);   // now playing kan vara 204 ibland – det är enligt spec. :contentReference[oaicite:1]{index=1}
-  setInterval(pollRecent,   1200);    // lite “snällare” än 1s → färre 429, jmf Spotify’s guidelines. :contentReference[oaicite:2]{index=2}
+  // Pollar NOW varje sekund; om track-id ändras => CLEARA & hämta recent en gång
+  async function pollNow(){
+    try{
+      const r = await fetch(API_NOW,{cache:"no-store"});
+      const d = await r.json();
+      paintNow(d);
+
+      const id = d && d.playing ? d.id : null;
+      if(id && id !== prevNowId){
+        prevNowId = id;
+        clearRecentSkeleton();   // visa tomma/skeleton direkt
+        fetchRecentFor(id);      // hämta nya “senaste spelade” en gång
+      }
+      if(!id && prevNowId !== null){
+        // slutade spela – nollställ så nästa start triggar en refresh
+        prevNowId = null;
+        clearRecentSkeleton();
+        fetchRecentFor(null);
+      }
+    }catch{}
+  }
+
+  // Start
+  clearRecentSkeleton();    // initialt
+  pollNow();
+  setInterval(pollNow, 1000); // minst 1 Hz för Now Playing
 </script>
 </body>
 </html>
