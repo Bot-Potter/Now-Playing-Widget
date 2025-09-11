@@ -150,7 +150,6 @@ async function getAccessToken() {
 /* ==========================================================
    NOW + SNAPSHOT
    ========================================================== */
-let lastNow = { playing: false };
 let lastTrackSnapshot = null; // senaste playing:true payload
 let lastTrackSeenAt = 0;
 const SNAPSHOT_TTL_MS = 2 * 60 * 1000;
@@ -160,19 +159,18 @@ app.get("/now-playing", async (_req, res) => {
   noStore(res);
   try {
     const at = await getAccessToken();
-    if (!at) { lastNow = { playing:false }; return res.json({ playing:false }); }
+    if (!at) return res.json({ playing:false });
 
-    // Obs: Spotify kan svara 204 No Content även när låt spelas (känt fenomen).
-    // Vi hanterar det genom att svara playing:false i så fall. :contentReference[oaicite:1]{index=1}
+    // Obs: “Currently Playing” kan ge 204 No Content ibland; hantera som “inget spelas”. :contentReference[oaicite:1]{index=1}
     const r = await fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track", {
       headers: { Authorization: `Bearer ${at}` }
     });
 
-    if (r.status === 204) { lastNow = { playing:false }; return res.json({ playing:false }); }
-    if (!r.ok) { lastNow = { playing:false }; return res.json({ playing:false }); }
+    if (r.status === 204) return res.json({ playing:false });
+    if (!r.ok) return res.json({ playing:false });
 
     const json = await r.json();
-    if (!json?.is_playing) { lastNow = { playing:false }; return res.json({ playing:false }); }
+    if (!json?.is_playing) return res.json({ playing:false });
 
     const item = json.item || {};
     const img = item.album?.images?.[0]?.url || "";
@@ -191,10 +189,8 @@ app.get("/now-playing", async (_req, res) => {
 
     lastTrackSnapshot = payload;
     lastTrackSeenAt = Date.now();
-    lastNow = payload;
     res.json(payload);
   } catch (e) {
-    lastNow = { playing:false };
     res.json({ playing:false, error:e.message });
   }
 });
@@ -208,10 +204,10 @@ app.get("/now-snapshot", (_req, res) => {
 });
 
 /* ==========================================================
-   RECENT (enkel & robust)
+   RECENT (enkel & korrekt)
    - Hämtar alltid senaste N (RECENT_LIMIT, default 10) från Spotify
-   - Sorterar på played_at desc
-   - Deduperar på track-id (ändra om du vill visa dubbla spelningar)
+   - Sorterar på played_at desc (för säkerhets skull)
+   - Ingen optimistic/merge/dedupe; vi visar “sanningen” från Spotify
    - Respekterar 429 Retry-After och serverar cache under backoff
    ========================================================== */
 let recentCache = { items: [], updatedAt: 0 };
@@ -234,7 +230,7 @@ app.get("/recent", async (req, res) => {
   const excludeId = (req.query.exclude_id || "").trim() || null;
   const now = Date.now();
 
-  // Under pågående backoff → svara cache
+  // Under backoff (429) → svara cache
   if (now < recentBackoffUntil && recentCache.items.length) {
     const out = recentCache.items
       .filter(x => (excludeId ? x.id !== excludeId : true))
@@ -252,12 +248,13 @@ app.get("/recent", async (req, res) => {
     }
 
     const url = new URL("https://api.spotify.com/v1/me/player/recently-played");
-    // Officiell limit: 1..50 — vi tar t.ex. 10 för att vara snälla. :contentReference[oaicite:2]{index=2}
-    url.searchParams.set("limit", String(Math.min(50, Math.max(1, parseInt(RECENT_LIMIT, 10) || 10))));
+    // Officiell limit: 1..50 (vi tar ex. 10 för att vara snälla). :contentReference[oaicite:2]{index=2}
+    const lim = Math.min(50, Math.max(1, parseInt(RECENT_LIMIT, 10) || 10));
+    url.searchParams.set("limit", String(lim));
 
     const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${at}` } });
 
-    // Hantera rate limit enligt docs (Retry-After i sekunder). :contentReference[oaicite:3]{index=3}
+    // Ratelimit: vänta enligt Retry-After (sekunder) och serva cache under tiden. :contentReference[oaicite:3]{index=3}
     if (r.status === 429) {
       const ra = Number(r.headers.get("retry-after") || 2);
       recentBackoffUntil = now + ra * 1000;
@@ -275,22 +272,16 @@ app.get("/recent", async (req, res) => {
     }
 
     const json = await r.json();
-    // Sortera på played_at desc; dedupera på track-id (vill du visa upprepningar: ta bort dedup)
+
+    // Sortera på played_at desc (Spotify returnerar i praktiken nyast först, men vi säkrar ordningen)
     const mapped = mapRecentItems(json)
       .sort((a, b) => toMs(b.played_at) - toMs(a.played_at));
 
-    const seen = new Set();
-    const deduped = [];
-    for (const it of mapped) {
-      if (seen.has(it.id)) continue;
-      seen.add(it.id);
-      deduped.push(it);
-      if (deduped.length >= 10) break;
-    }
+    // Uppdatera cache
+    recentCache = { items: mapped, updatedAt: now };
 
-    recentCache = { items: deduped, updatedAt: now };
-
-    const out = deduped
+    // Skicka topp 3, med ev. exclude_id
+    const out = mapped
       .filter(x => (excludeId ? x.id !== excludeId : true))
       .slice(0, 3);
 
