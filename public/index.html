@@ -10,13 +10,17 @@
   body{margin:0;background:#0b0710;display:grid;place-items:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter;color:var(--text)}
   .wrap{width:min(760px,94vw)}
 
+  /* KORTET */
   .card{
-    position:relative;width:100%;padding:18px 22px 20px;border-radius:var(--radius);
+    position:relative;width:100%;
+    padding:18px 22px 20px;border-radius:var(--radius);
     overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);isolation:isolate;
-    cursor:pointer;text-decoration:none;color:inherit;display:block
+    cursor:pointer;text-decoration:none;color:inherit;display:block;
   }
-  .bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(26px) saturate(130%) brightness(70%);transform:scale(1.12);z-index:-2}
-  .card::after{content:"";position:absolute;inset:0;background:linear-gradient(120deg,rgba(18,8,22,.70),rgba(35,10,35,.42));z-index:-1}
+  .bg{position:absolute;inset:0;background-size:cover;background-position:center;
+      filter:blur(26px) saturate(130%) brightness(70%);transform:scale(1.12);z-index:-2}
+  .card::after{content:"";position:absolute;inset:0;
+    background:linear-gradient(120deg,rgba(18,8,22,.70),rgba(35,10,35,.42));z-index:-1}
 
   .row{display:flex;align-items:center;gap:18px}
   .cover{width:110px;height:110px;flex:0 0 auto;border-radius:50%;padding:5px;
@@ -34,6 +38,7 @@
 
   .empty{text-align:center;padding:28px 22px;color:#e0cade;opacity:.85}
 
+  /* SENASTE 3 */
   .recent{margin-top:14px;display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:12px;width:100%}
   .chip{
     width:100%;display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:12px;
@@ -45,22 +50,15 @@
   .chip .t{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .chip .a{font-size:12px;color:#d7c7df;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.95}
 
-  /* enkel skeleton när vi väntar */
-  .skeleton{position:relative;overflow:hidden}
-  .skeleton::after{
-    content:""; position:absolute; inset:0;
-    background:linear-gradient(90deg, rgba(255,255,255,.06), rgba(255,255,255,.12), rgba(255,255,255,.06));
-    animation:shimmer 1.2s infinite; opacity:.35
-  }
-  @keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
-
   @media (max-width:560px){ .recent{grid-template-columns:repeat(2, minmax(0, 1fr))} }
 </style>
 </head>
 <body>
   <div class="wrap">
+    <!-- Hela kortet klickbart -->
     <a id="cardLink" class="card" aria-live="polite" target="_blank" rel="noopener">
       <div id="bg" class="bg"></div>
+
       <div id="content" class="row" hidden>
         <div class="cover"><img id="cover" alt="Omslag"></div>
         <div class="meta">
@@ -70,9 +68,11 @@
           <div class="progress"><div id="bar" class="bar"></div></div>
         </div>
       </div>
+
       <div id="empty" class="empty">Ingen låt spelas just nu.</div>
     </a>
 
+    <!-- Senaste 3 -->
     <div id="recent" class="recent" aria-label="Senaste låtar"></div>
   </div>
 
@@ -107,9 +107,9 @@
   }
   const setAccent=c=>document.documentElement.style.setProperty("--accent",c);
 
-  let prevNowId = null;         // senaste track-id vi sett
-  let recCtl = null;            // AbortController för /recent
-  let lastRecentKey = "";       // "id@played|id@played|id@played" för stabil diff
+  let prevNowId = undefined;     // undefined = ej init; null = inget spelas; "str" = track-id
+  let lastRecentKey = "";        // för att undvika onödiga renders
+  let recCtl = null;
 
   function paintNow(d){
     if(!d||!d.playing){
@@ -130,17 +130,21 @@
     el.recent.innerHTML="";
     for(let i=0;i<3;i++){
       const ph=document.createElement("div");
-      ph.className="chip skeleton"; // liten shimmer medan vi hämtar
+      ph.className="chip";
+      ph.style.opacity=".5";
       ph.innerHTML=`<img alt=""><div class="text"><div class="t"> </div><div class="a"> </div></div>`;
       el.recent.appendChild(ph);
     }
-    lastRecentKey = ""; // tvinga nästa render att skriva om
+    lastRecentKey = ""; // tvinga nästa render
   }
 
-  function renderRecent(items){
-    // Bygg nyckel på id@played_at (ordning betyder något)
+  function renderRecent(items, sourceLabel=""){
+    // key: id@played_at × 3
     const key = items.map(x=>`${x.id||"-"}@${x.played_at||"-"}`).slice(0,3).join("|");
-    if(key===lastRecentKey) return;
+    if(key===lastRecentKey){
+      console.debug("[recent] unchanged", sourceLabel, key);
+      return;
+    }
     lastRecentKey = key;
 
     el.recent.innerHTML="";
@@ -159,21 +163,35 @@
     for(let k=three.length;k<3;k++){
       const ph=document.createElement("div"); ph.className="chip"; ph.style.visibility="hidden"; el.recent.appendChild(ph);
     }
+    console.debug("[recent] rendered", sourceLabel, three.map(t=>t.title));
   }
 
-  async function fetchRecentFor(nowId){
+  async function fetchRecent({excludeId, label}){
     try{
       if(recCtl) recCtl.abort();
       recCtl = new AbortController();
-      const qs = nowId ? `?exclude_id=${encodeURIComponent(nowId)}` : "";
+      const qs = excludeId ? `?exclude_id=${encodeURIComponent(excludeId)}` : "";
       const r = await fetch(API_REC+qs,{cache:"no-store", signal:recCtl.signal});
       const j = await r.json();
-      const items = Array.isArray(j.items)? j.items : [];
-      renderRecent(items);
-    }catch{}
+      let items = Array.isArray(j.items)? j.items : [];
+      console.debug("[recent] fetch", label, "excludeId=", excludeId, "count=", items.length, j);
+
+      // Fallback: om tomt med exclude → prova utan exclude en gång
+      if (excludeId && items.length === 0) {
+        console.debug("[recent] empty with exclude → retry without exclude");
+        const r2 = await fetch(API_REC,{cache:"no-store"});
+        const j2 = await r2.json();
+        items = Array.isArray(j2.items)? j2.items : [];
+        console.debug("[recent] retry result count=", items.length);
+      }
+
+      renderRecent(items, label || "");
+    }catch(e){
+      if (e.name !== "AbortError") console.warn("[recent] fetch error", e);
+    }
   }
 
-  // Pollar NOW varje sekund; om track-id ändras => CLEARA & hämta recent en gång
+  // Pollar NOW varje sekund; på låtbyte -> cleara & hämta recent
   async function pollNow(){
     try{
       const r = await fetch(API_NOW,{cache:"no-store"});
@@ -181,24 +199,37 @@
       paintNow(d);
 
       const id = d && d.playing ? d.id : null;
-      if(id && id !== prevNowId){
+
+      // Init: hämta recent direkt
+      if (prevNowId === undefined) {
         prevNowId = id;
-        clearRecentSkeleton();   // visa tomma/skeleton direkt
-        fetchRecentFor(id);      // hämta nya “senaste spelade” en gång
-      }
-      if(!id && prevNowId !== null){
-        // slutade spela – nollställ så nästa start triggar en refresh
-        prevNowId = null;
         clearRecentSkeleton();
-        fetchRecentFor(null);
+        fetchRecent({ excludeId:id, label:"init" });
+        return;
       }
-    }catch{}
+
+      // Byte av låt → cleara + hämta recent
+      if (id !== prevNowId) {
+        console.debug("[now] track change", prevNowId, "→", id);
+        prevNowId = id;
+        clearRecentSkeleton();
+        fetchRecent({ excludeId:id, label:"change" });
+      }
+    }catch(e){
+      console.warn("[now] error", e);
+    }
   }
 
+  // Failsafe: hämta recent var 15:e sekund också
+  setInterval(()=> {
+    const id = prevNowId ?? null;
+    fetchRecent({ excludeId:id, label:"interval" });
+  }, 15000);
+
   // Start
-  clearRecentSkeleton();    // initialt
+  clearRecentSkeleton();
   pollNow();
-  setInterval(pollNow, 1000); // minst 1 Hz för Now Playing
+  setInterval(pollNow, 1000); // Now Playing minst 1 Hz
 </script>
 </body>
 </html>
