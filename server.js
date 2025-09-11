@@ -18,10 +18,17 @@ const {
   SPOTIFY_CLIENT_SECRET,
   SPOTIFY_REDIRECT_URI,
   PORT = process.env.PORT || 3000,
+
+  // Twitch (valfritt – för overlay-triggers)
   TWITCH_USERNAME,
   TWITCH_OAUTH_TOKEN,
   TWITCH_CHANNEL,
-  ADMIN_SECRET
+
+  // Admin
+  ADMIN_SECRET,
+
+  // Server-side styrning (valfritt)
+  RECENT_LIMIT = "10" // hur många vi hämtar från Spotify innan vi skär ned till 3
 } = process.env;
 
 /* ---------------- Helpers ---------------- */
@@ -141,47 +148,12 @@ async function getAccessToken() {
 }
 
 /* ==========================================================
-   STATE: now + snapshot + optimistic bridge + history buffer
+   NOW + SNAPSHOT
    ========================================================== */
 let lastNow = { playing: false };
-
 let lastTrackSnapshot = null; // senaste playing:true payload
 let lastTrackSeenAt = 0;
 const SNAPSHOT_TTL_MS = 2 * 60 * 1000;
-
-let optimisticQueue = []; // {id,title,artists[],image,url,played_at}
-const OPTIMISTIC_TTL_MS = 30000;
-
-// Recent buffer
-let historyBuffer = [];   // newest-first; unique by id@played_at
-const HISTORY_MAX = 50;
-
-// Spotify "Recently Played" cursor + fetch-timers
-let recentCursor = null;              // Spotify-respons: cursors.after (string ms)
-let lastRecentFetchTs = 0;
-const RECENT_FETCH_MIN_MS = 1500;     // snällare för att undvika 429
-let recentBackoffUntil = 0;           // backoff vid 429
-
-function pushOptimisticFromNow(nowObj) {
-  if (!nowObj || !nowObj.id) return;
-  optimisticQueue.unshift({
-    id: nowObj.id,
-    title: nowObj.title || "",
-    artists: nowObj.artists || [],
-    image: nowObj.image || "",
-    url: nowObj.url || "",
-    played_at: new Date().toISOString()
-  });
-  const seen = new Set();
-  const nowTs = Date.now();
-  optimisticQueue = optimisticQueue.filter(x => {
-    const fresh = (nowTs - toMs(x.played_at)) < OPTIMISTIC_TTL_MS;
-    const key = x.id;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return fresh;
-  });
-}
 
 /* ---------------- /now-playing ---------------- */
 app.get("/now-playing", async (_req, res) => {
@@ -190,6 +162,8 @@ app.get("/now-playing", async (_req, res) => {
     const at = await getAccessToken();
     if (!at) { lastNow = { playing:false }; return res.json({ playing:false }); }
 
+    // Obs: Spotify kan svara 204 No Content även när låt spelas (känt fenomen).
+    // Vi hanterar det genom att svara playing:false i så fall. :contentReference[oaicite:1]{index=1}
     const r = await fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track", {
       headers: { Authorization: `Bearer ${at}` }
     });
@@ -215,14 +189,8 @@ app.get("/now-playing", async (_req, res) => {
       duration_ms: item.duration_ms || 0
     };
 
-    // snapshot så overlay kan falla tillbaka
     lastTrackSnapshot = payload;
     lastTrackSeenAt = Date.now();
-
-    // tryck in föregående i optimistic-kö om track bytts
-    if (lastNow?.playing && lastNow?.id && lastNow.id !== payload.id) {
-      pushOptimisticFromNow(lastNow);
-    }
     lastNow = payload;
     res.json(payload);
   } catch (e) {
@@ -239,101 +207,99 @@ app.get("/now-snapshot", (_req, res) => {
   return res.json({ playing: false });
 });
 
-/* ---------------- Spotify Recent helpers (cursor + reset + backoff) ---------------- */
-async function fetchSpotifyRecentPage(afterCursor) {
-  const at = await getAccessToken();
-  if (!at) return { items: null, cursor: null, status: 401 };
+/* ==========================================================
+   RECENT (enkel & robust)
+   - Hämtar alltid senaste N (RECENT_LIMIT, default 10) från Spotify
+   - Sorterar på played_at desc
+   - Deduperar på track-id (ändra om du vill visa dubbla spelningar)
+   - Respekterar 429 Retry-After och serverar cache under backoff
+   ========================================================== */
+let recentCache = { items: [], updatedAt: 0 };
+let recentBackoffUntil = 0; // epoch ms
 
-  const url = new URL("https://api.spotify.com/v1/me/player/recently-played");
-  url.searchParams.set("limit", "50");
-  if (afterCursor) url.searchParams.set("after", String(afterCursor));
+const mapRecentItems = (json) => (json.items || [])
+  .filter(it => it?.track?.id && it?.played_at)
+  .map(it => ({
+    id: it.track.id,
+    title: it.track.name || "",
+    artists: (it.track.artists || []).map(a => a.name),
+    image: it.track.album?.images?.[0]?.url || "",
+    url: it.track.external_urls?.spotify || "",
+    played_at: it.played_at
+  }));
 
-  const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${at}` } });
-  const status = r.status;
-
-  if (status === 429) {
-    const ra = Number(r.headers.get("retry-after") || 2);
-    recentBackoffUntil = Date.now() + ra * 1000;
-    return { items: null, cursor: null, status };
-  }
-  if (!r.ok) return { items: null, cursor: null, status };
-
-  const json = await r.json();
-
-  const items = (json.items || [])
-    .filter(it => it?.track?.id && it?.played_at)
-    .map(it => ({
-      id: it.track.id,
-      title: it.track.name || "",
-      artists: (it.track.artists || []).map(a => a.name),
-      image: it.track.album?.images?.[0]?.url || "",
-      url: it.track.external_urls?.spotify || "",
-      played_at: it.played_at
-    }));
-
-  const cursor = json.cursors?.after ? String(json.cursors.after) : null;
-  return { items, cursor, status: 200 };
-}
-
-async function refreshRecent() {
-  const now = Date.now();
-  if (now < recentBackoffUntil) return; // under backoff
-  if (now - lastRecentFetchTs < RECENT_FETCH_MIN_MS) return;
-  lastRecentFetchTs = now;
-
-  // 1) Försök med cursor (incremental)
-  let page = await fetchSpotifyRecentPage(recentCursor);
-
-  // 2) Om inget nytt → reset (full fetch)
-  if (page.status === 200 && (!page.items || page.items.length === 0)) {
-    page = await fetchSpotifyRecentPage(null);
-  }
-  if (page.status === 429) return; // backoff satt
-  if (page.status !== 200 || !page.items) return;
-
-  const merged = [...page.items, ...historyBuffer];
-  const seen = new Set();
-  const next = [];
-  for (const it of merged.sort((a,b)=> toMs(b.played_at) - toMs(a.played_at))) {
-    const key = `${it.id}@${it.played_at}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    next.push(it);
-    if (next.length >= HISTORY_MAX) break;
-  }
-  historyBuffer = next;
-
-  if (page.cursor) recentCursor = page.cursor;
-}
-
-/* ---------------- /recent (stabil) ---------------- */
 app.get("/recent", async (req, res) => {
   noStore(res);
-  try {
-    await refreshRecent();
 
-    const excludeId = (req.query.exclude_id || "").trim() || null;
-    const nowTs = Date.now();
-    const freshOptimistic = optimisticQueue.filter(o => (nowTs - toMs(o.played_at)) < OPTIMISTIC_TTL_MS);
+  const excludeId = (req.query.exclude_id || "").trim() || null;
+  const now = Date.now();
 
-    // slå ihop optimistic + buffer, sortera och filtrera
-    const merged = [...freshOptimistic, ...historyBuffer]
+  // Under pågående backoff → svara cache
+  if (now < recentBackoffUntil && recentCache.items.length) {
+    const out = recentCache.items
       .filter(x => (excludeId ? x.id !== excludeId : true))
-      .sort((a,b) => toMs(b.played_at) - toMs(a.played_at));
+      .slice(0, 3);
+    return res.json({ items: out });
+  }
 
-    // topp 3, unik på track-id (vill du visa dubbla spelningar – ta bort seenId)
-    const out = [];
-    const seenId = new Set();
-    for (const it of merged) {
-      if (seenId.has(it.id)) continue;
-      seenId.add(it.id);
-      out.push(it);
-      if (out.length >= 3) break;
+  try {
+    const at = await getAccessToken();
+    if (!at) {
+      const out = recentCache.items
+        .filter(x => (excludeId ? x.id !== excludeId : true))
+        .slice(0, 3);
+      return res.json({ items: out });
     }
+
+    const url = new URL("https://api.spotify.com/v1/me/player/recently-played");
+    // Officiell limit: 1..50 — vi tar t.ex. 10 för att vara snälla. :contentReference[oaicite:2]{index=2}
+    url.searchParams.set("limit", String(Math.min(50, Math.max(1, parseInt(RECENT_LIMIT, 10) || 10))));
+
+    const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${at}` } });
+
+    // Hantera rate limit enligt docs (Retry-After i sekunder). :contentReference[oaicite:3]{index=3}
+    if (r.status === 429) {
+      const ra = Number(r.headers.get("retry-after") || 2);
+      recentBackoffUntil = now + ra * 1000;
+      const out = recentCache.items
+        .filter(x => (excludeId ? x.id !== excludeId : true))
+        .slice(0, 3);
+      return res.json({ items: out });
+    }
+
+    if (!r.ok) {
+      const out = recentCache.items
+        .filter(x => (excludeId ? x.id !== excludeId : true))
+        .slice(0, 3);
+      return res.json({ items: out });
+    }
+
+    const json = await r.json();
+    // Sortera på played_at desc; dedupera på track-id (vill du visa upprepningar: ta bort dedup)
+    const mapped = mapRecentItems(json)
+      .sort((a, b) => toMs(b.played_at) - toMs(a.played_at));
+
+    const seen = new Set();
+    const deduped = [];
+    for (const it of mapped) {
+      if (seen.has(it.id)) continue;
+      seen.add(it.id);
+      deduped.push(it);
+      if (deduped.length >= 10) break;
+    }
+
+    recentCache = { items: deduped, updatedAt: now };
+
+    const out = deduped
+      .filter(x => (excludeId ? x.id !== excludeId : true))
+      .slice(0, 3);
 
     res.json({ items: out });
   } catch (e) {
-    res.json({ items: [], error: String(e) });
+    const out = recentCache.items
+      .filter(x => (excludeId ? x.id !== excludeId : true))
+      .slice(0, 3);
+    res.json({ items: out, error: String(e) });
   }
 });
 
