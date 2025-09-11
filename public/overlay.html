@@ -3,10 +3,9 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Song Overlay (clean & stable)</title>
+<title>Song Overlay (clean & ticking)</title>
 <style>
   :root{
-    --duration-ms: 10000;      /* 10 s */
     --scale: 1;
     --pos-x: 50%;              /* 0% vänster, 50% mitt, 100% höger (kan styras via ?pos=) */
     --offset-bottom: 24px;     /* ?y= */
@@ -15,7 +14,7 @@
 
     --accent:#c84cff;          /* ersätts från albumet */
     --text:#fff; --muted:#e7d9ef;
-    --glass: rgba(14,10,18,.85);        /* solid RGBA (ingen opacity på .card) */
+    --glass: rgba(14,10,18,.85);
     --glass-border: rgba(255,255,255,.15);
     --bar-bg: rgba(255,255,255,.2);
   }
@@ -25,7 +24,6 @@
   body{ margin:0; background:transparent; overflow:hidden;
         font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:var(--text); }
 
-  /* slide-in behållare */
   .tray{
     position:fixed; left:var(--pos-x); bottom:0;
     transform:translate(-50%, 140%) scale(var(--scale));
@@ -35,24 +33,19 @@
   }
   .tray.show{ transform:translate(-50%, calc(-1 * var(--offset-bottom))) scale(var(--scale)); }
 
-  /* KORTET – minimala lager, inget ::before/after, inget maskande */
   .card{
-    position:relative; isolation:isolate;  /* egen stacking context */
+    position:relative; isolation:isolate;
     display:block; color:inherit; text-decoration:none;
     width:100%; padding:16px 18px 18px; border-radius:var(--radius);
     background:var(--glass); border:1px solid var(--glass-border);
-    /* valfri backdrop, svag – mindre risk för artefakter */
     backdrop-filter:saturate(115%) blur(6px);
   }
-
-  /* bakgrundsbild (svag, mörkare) – kan stängas av via ?blur=0 */
   .bg{ position:absolute; inset:0; background-size:cover; background-position:center;
        filter: blur(10px) saturate(110%) brightness(0.6);
        transform:scale(1.04); opacity:.45; z-index:-1; }
-  .no-blur .bg{ display:none; }   /* safe mode: ingen filterbakgrund */
+  .no-blur .bg{ display:none; }
 
   .row{ display:grid; grid-template-columns:auto 1fr auto; gap:14px; align-items:center }
-
   .cover{ width:86px; height:86px; border-radius:14px; padding:4px;
           background:rgba(255,255,255,.10); box-shadow:0 6px 18px rgba(0,0,0,.45); }
   .cover img{ width:100%; height:100%; border-radius:10px; object-fit:cover; display:block; }
@@ -99,21 +92,29 @@
 
 <script>
   /* ===== URL-parametrar =====
-     ?pos=left|center|right, ?scale=1.1, ?y=32, ?blur=0|1 (default 0 = stabilast)
+     ?pos=left|center|right
+     ?scale=1.0
+     ?y=24                  (px)
+     ?blur=0|1              (0 = stäng av blurrad bg, 1 = på)
+     ?dur=10                (sekunder visningstid, default 10)
+     ?tick=250              (ms lokaltik – hur ofta vi uppdaterar progress/tider; default 250)
+     ?sync=1000             (ms resync mot server – minst 1000ms)
   */
-  (function params(){
-    const q=new URLSearchParams(location.search);
-    const pos=(q.get("pos")||"center").toLowerCase();
-    document.documentElement.style.setProperty("--pos-x", pos==="left"?"0%":pos==="right"?"100%":"50%");
-    if(q.get("scale")) document.documentElement.style.setProperty("--scale", q.get("scale"));
-    if(q.get("y")) document.documentElement.style.setProperty("--offset-bottom", q.get("y")+"px");
-    if(q.get("blur")==="0" || !q.has("blur")) document.getElementById("card").classList.add("no-blur");
-  })();
+  const q = new URLSearchParams(location.search); // URLSearchParams för att läsa queryn. :contentReference[oaicite:0]{index=0}
+  const pos=(q.get("pos")||"center").toLowerCase();
+  document.documentElement.style.setProperty("--pos-x", pos==="left"?"0%":pos==="right"?"100%":"50%");
+  if(q.get("scale")) document.documentElement.style.setProperty("--scale", q.get("scale"));
+  if(q.get("y")) document.documentElement.style.setProperty("--offset-bottom", q.get("y")+"px");
+  const useBlur = q.get("blur")==="1";
+  const DUR_MS  = Math.max(1000, (parseFloat(q.get("dur"))||10)*1000);
+  const TICK_MS = Math.max(100, parseInt(q.get("tick")||"250",10));
+  const SYNC_MS = Math.max(1000, parseInt(q.get("sync")||"1000",10));
 
   const API_NOW="/now-playing", API_SNAP="/now-snapshot";
   const $=id=>document.getElementById(id);
   const el={ tray:$("tray"), card:$("card"), bg:$("bg"), cover:$("cover"),
              title:$("title"), artist:$("artist"), tStart:$("tStart"), tEnd:$("tEnd"), bar:$("bar"), by:$("by") };
+  if(!useBlur) el.card.classList.add("no-blur");
 
   const ms=x=>{ x=Math.max(0, x|0); const s=Math.floor(x/1000), m=Math.floor(s/60); return `${m}:${String(s%60).padStart(2,"0")}`; };
 
@@ -131,13 +132,10 @@
   }
   const setAccent=c=>document.documentElement.style.setProperty("--accent", c);
 
-  function paint(d, who){
-    if(!d||!d.playing) return false;
+  function paintStatic(d, who){
+    // Paint statiska delar från payload
     el.title.textContent = d.title || "Okänd låt";
     el.artist.textContent = (d.artists||[]).join(", ") || d.album || "";
-    const p=d.progress_ms||0, t=d.duration_ms||1;
-    el.tStart.textContent = ms(p); el.tEnd.textContent = ms(t);
-    el.bar.style.width = (100*p/t) + "%";
     if(d.image){
       el.cover.src = d.image;
       el.bg.style.backgroundImage = `url("${d.image}")`;
@@ -145,17 +143,71 @@
     }
     el.card.href = d.url || "#";
     el.by.textContent = who ? `av ${who}` : "";
-    return true;
   }
 
-  let hideTimer=null;
-  function showFor(ms = 10000){
+  // === Ticking (rAF + setInterval resync) ===
+  // rAF för jämn animation, setInterval för regelbunden uppdatering. :contentReference[oaicite:1]{index=1}
+  let rafId=null, tickId=null, syncId=null, hideTimer=null;
+  let baseProgress=0, duration=1, startedAt=0; // ms
+
+  function startTicker(p0, dur){
+    baseProgress = p0|0;
+    duration     = Math.max(1, dur|0);
+    startedAt    = performance.now();
+
+    stopTicker(); // ifall en fanns
+    const step = (t)=>{
+      const elapsed = t - startedAt;
+      const p = Math.min(duration, baseProgress + elapsed);
+      el.tStart.textContent = ms(p);
+      el.tEnd.textContent   = ms(duration);
+      el.bar.style.width    = (100 * p / duration) + "%";
+      rafId = requestAnimationFrame(step); // rAF – körs före nästa repaint. :contentReference[oaicite:2]{index=2}
+    };
+    rafId = requestAnimationFrame(step);
+
+    // Extra säkerhets-tick (minst var TICK_MS) – om du vill strikt 1 Hz kan du sätta ?tick=1000
+    tickId = setInterval(()=>{
+      // uppdateringen görs redan via rAF; intervallet finns bara för att garantera "minst X ms"
+      // här kan vi tvinga en uppdatering om rAF skulle pausas
+      const now = performance.now();
+      const p = Math.min(duration, baseProgress + (now - startedAt));
+      el.tStart.textContent = ms(p);
+      el.bar.style.width    = (100 * p / duration) + "%";
+    }, TICK_MS); // setInterval kör vår funktion upprepat tills clearInterval(). :contentReference[oaicite:3]{index=3}
+
+    // Resync mot servern för att undvika drift
+    syncId = setInterval(async ()=>{
+      try{
+        const r = await fetch(API_NOW,{cache:"no-store"});
+        const j = await r.json();
+        if (j && j.playing && j.id) {
+          // Om låten bytts under visningen: avsluta visningen direkt (valfritt)
+          // annars justera progress så animationen matchar servern
+          baseProgress = j.progress_ms|0;
+          duration     = Math.max(1, j.duration_ms|0);
+          startedAt    = performance.now();
+        }
+      }catch{}
+    }, SYNC_MS);
+  }
+  function stopTicker(){
+    if(rafId!==null){ cancelAnimationFrame(rafId); rafId=null; }
+    if(tickId){ clearInterval(tickId); tickId=null; }
+    if(syncId){ clearInterval(syncId); syncId=null; }
+  }
+
+  function showFor(ms){
     clearTimeout(hideTimer);
     el.tray.classList.add("show");
-    hideTimer=setTimeout(()=>el.tray.classList.remove("show"), ms);
+    hideTimer = setTimeout(()=>{
+      el.tray.classList.remove("show");
+      stopTicker();
+    }, ms);
   }
 
-  async function fetchNowWithRetry(max=5,delay=250){
+  // === Dataflöde ===
+  async function fetchNowWithRetry(max=5, delay=250){
     for(let i=0;i<max;i++){
       try{ const r=await fetch(API_NOW,{cache:"no-store"}); const j=await r.json(); if(j&&j.playing) return j; }catch{}
       await new Promise(r=>setTimeout(r,delay));
@@ -165,14 +217,23 @@
   }
 
   async function handleTrigger(who){
-    const now = await fetchNowWithRetry(6,250);
-    if(paint(now,who)) showFor();
+    const now = await fetchNowWithRetry(6, 250);
+    if(!now || !now.playing) return;
+
+    paintStatic(now, who);
+    startTicker(now.progress_ms||0, now.duration_ms||1);
+    showFor(DUR_MS);
   }
 
-  const es=new EventSource("/events");
-  es.addEventListener("song",(ev)=>{ let by=null; try{by=JSON.parse(ev.data).by||null;}catch{} handleTrigger(by); });
+  // SSE: triggas från servern när någon skriver !song/!låt
+  // EventSource håller en långlivad anslutning och tar emot events från servern. :contentReference[oaicite:4]{index=4}
+  const es = new EventSource("/events");
+  es.addEventListener("song", (ev)=>{
+    let by=null; try{ by=JSON.parse(ev.data).by||null; }catch{}
+    handleTrigger(by);
+  });
 
-  // Test i browsern: S
+  // Snabbtest i browsern: tryck S
   addEventListener("keydown",(e)=>{ if(e.key.toLowerCase()==="s") handleTrigger("debug"); });
 </script>
 </body>
