@@ -68,16 +68,16 @@
   </div>
 
 <script>
-  const API_NOW="/now-playing";
-  const API_REC="/recent";
+  const API_NOW = "/now-playing";
+  const API_REC = "/recent";
 
-  const el={
-    cardLink:gid("cardLink"), bg:gid("bg"), content:gid("content"), empty:gid("empty"),
-    cover:gid("cover"), title:gid("title"), artist:gid("artist"),
-    tStart:gid("tStart"), tEnd:gid("tEnd"), bar:gid("bar"),
-    recent:gid("recent")
+  const el = {
+    cardLink:document.getElementById("cardLink"),
+    bg:document.getElementById("bg"), content:document.getElementById("content"), empty:document.getElementById("empty"),
+    cover:document.getElementById("cover"), title:document.getElementById("title"), artist:document.getElementById("artist"),
+    tStart:document.getElementById("tStart"), tEnd:document.getElementById("tEnd"), bar:document.getElementById("bar"),
+    recent:document.getElementById("recent")
   };
-  function gid(id){return document.getElementById(id)}
 
   const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
   const esc=s=>String(s).replace(/[&<>"]/g,m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[m]));
@@ -98,14 +98,19 @@
   }
   const setAccent=c=>document.documentElement.style.setProperty("--accent",c);
 
-  let now=null;
-
-  // —— NOW
+  // ===== Now Playing (oförändrat)
+  async function pollNow(){
+    try{
+      const r=await fetch(API_NOW,{cache:"no-store"});
+      const d=await r.json();
+      paintNow(d);
+    }catch{}
+  }
   function paintNow(d){
     if(!d||!d.playing){
-      el.content.hidden=true; el.empty.hidden=false; el.bg.style.backgroundImage=""; el.cardLink.href="#"; now=null; return;
+      el.content.hidden=true; el.empty.hidden=false;
+      el.bg.style.backgroundImage=""; el.cardLink.href="#"; return;
     }
-    now=d;
     el.content.hidden=false; el.empty.hidden=true;
     el.title.textContent=d.title||"Okänd låt";
     el.artist.textContent=(d.artists||[]).join(", ")||d.album||"";
@@ -116,40 +121,37 @@
     el.cardLink.href=d.url||"#";
   }
 
-  // —— RECENT (stabil med id@played_at + serialisering)
-  let recentKey="";               // "id@played|id@played|id@played"
-  let recCtl=null, nowCtl=null;   // AbortController
-  let recSeq=0, recLastHandled=0; // sekvensräknare
+  // ===== Recent (superenkel & robust)
+  let recInFlight = false;        // undvik overlap
+  let lastKey = "";               // "id@played|id@played|id@played"
+  function makeKey(items){ return items.map(x=>`${x.id||"-"}@${x.played_at||"-"}`).join("|"); }
 
-  function calcKey(list){
-    return list.slice(0,3).map(it=>`${it.id||"-"}@${it.played_at||"-"}`).join("|");
-  }
-  function sortClean(list){
-    // sortera NYAST först enligt played_at (servern ska redan göra detta, men vi säkrar)
-    const arr = (list||[]).slice().filter(it=>it && it.id && it.played_at);
-    arr.sort((a,b)=> new Date(b.played_at).getTime() - new Date(a.played_at).getTime());
-    // dedupe på id@played_at (bevara unika instanser)
-    const seen=new Set(), out=[];
-    for(const it of arr){
-      const k=`${it.id}@${it.played_at}`;
-      if(seen.has(k)) continue;
-      seen.add(k); out.push(it);
-      if(out.length>=3) break;
+  async function pollRecent(){
+    if(recInFlight) return;
+    recInFlight = true;
+    try{
+      const qs = window.__nowId ? `?exclude_id=${encodeURIComponent(window.__nowId)}` : "";
+      const r = await fetch(API_REC+qs, { cache:"no-store" });
+      const j = await r.json();
+      const items = Array.isArray(j.items) ? j.items.slice(0,3) : [];
+
+      // nyckel baserat på id@played_at → uppdatera endast vid verklig ändring
+      const key = makeKey(items);
+      if (key !== lastKey) {
+        renderRecent(items);
+        lastKey = key;
+      }
+    }catch{} finally{
+      recInFlight = false;
     }
-    return out;
   }
 
-  function paintRecent(list){
-    const three = sortClean(list);
-    const key = calcKey(three);
-    if(key===recentKey) return;      // ingen faktisk ändring
-    recentKey = key;
-
-    el.recent.innerHTML="";
-    for(const it of three){
+  function renderRecent(items){
+    el.recent.innerHTML = "";
+    for(const it of items){
       const a=document.createElement("a");
       a.className="chip"; a.href=it.url||"#"; a.target="_blank"; a.rel="noopener";
-      a.innerHTML=`
+      a.innerHTML = `
         <img src="${esc(it.image||"")}" alt="">
         <div class="text">
           <div class="t">${esc(it.title||"")}</div>
@@ -157,38 +159,26 @@
         </div>`;
       el.recent.appendChild(a);
     }
-    for(let k=three.length;k<3;k++){ const ph=document.createElement("div"); ph.className="chip"; ph.style.visibility="hidden"; el.recent.appendChild(ph); }
+    for(let k=items.length;k<3;k++){
+      const ph=document.createElement("div"); ph.className="chip"; ph.style.visibility="hidden";
+      el.recent.appendChild(ph);
+    }
   }
 
-  // —— Pollers (abort + sekvenser)
-  async function pollNow(){
+  // Håll "now id" i en global för exclude-parametern (enkelt, utan kopplingslogik)
+  async function pollNowWithId(){
     try{
-      if(nowCtl) nowCtl.abort();
-      nowCtl = new AbortController();
-      const r=await fetch(API_NOW,{cache:"no-store", signal:nowCtl.signal});
-      const data=await r.json();
-      paintNow(data);
+      const r=await fetch(API_NOW,{cache:"no-store"});
+      const d=await r.json();
+      window.__nowId = d && d.playing ? d.id : null;
+      paintNow(d);
     }catch{}
   }
 
-  async function pollRecent(){
-    const mySeq=++recSeq;
-    try{
-      if(recCtl) recCtl.abort();
-      recCtl = new AbortController();
-      const qs = now?.id ? `?exclude_id=${encodeURIComponent(now.id)}` : "";
-      const r = await fetch(API_REC+qs,{cache:"no-store", signal:recCtl.signal});
-      const data = await r.json();
-      if(mySeq<recLastHandled) return; // ignorera sena svar
-      recLastHandled = mySeq;
-      paintRecent(Array.isArray(data.items)?data.items:[]);
-    }catch{}
-  }
-
-  // —— Start
-  pollNow(); pollRecent();
-  setInterval(pollNow, 1000);   // /currently-playing kan returnera 204 ibland – enligt spec. :contentReference[oaicite:3]{index=3}
-  setInterval(pollRecent, 1200);
+  // Start polling
+  pollNowWithId(); pollRecent();
+  setInterval(pollNowWithId, 1000);   // now playing kan vara 204 ibland – det är enligt spec. :contentReference[oaicite:1]{index=1}
+  setInterval(pollRecent,   1200);    // lite “snällare” än 1s → färre 429, jmf Spotify’s guidelines. :contentReference[oaicite:2]{index=2}
 </script>
 </body>
 </html>
