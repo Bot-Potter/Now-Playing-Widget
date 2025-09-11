@@ -10,7 +10,7 @@
   body{margin:0;background:#0b0710;display:grid;place-items:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter;color:var(--text)}
   .wrap{width:min(760px,94vw)}
 
-  /* KORTET */
+  /* Kortet */
   .card{
     position:relative;width:100%;
     padding:18px 22px 20px;border-radius:var(--radius);
@@ -38,7 +38,7 @@
 
   .empty{text-align:center;padding:28px 22px;color:#e0cade;opacity:.85}
 
-  /* SENASTE 3 */
+  /* Senaste 3 */
   .recent{margin-top:14px;display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:12px;width:100%}
   .chip{
     width:100%;display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:12px;
@@ -107,10 +107,6 @@
   }
   const setAccent=c=>document.documentElement.style.setProperty("--accent",c);
 
-  let prevNowId = undefined;     // undefined = ej init; null = inget spelas; "str" = track-id
-  let lastRecentKey = "";        // för att undvika onödiga renders
-  let recCtl = null;
-
   function paintNow(d){
     if(!d||!d.playing){
       el.content.hidden=true; el.empty.hidden=false; el.bg.style.backgroundImage=""; el.cardLink.href="#";
@@ -126,29 +122,9 @@
     el.cardLink.href = d.url || "#";
   }
 
-  function clearRecentSkeleton(){
+  function renderRecent(items){
     el.recent.innerHTML="";
-    for(let i=0;i<3;i++){
-      const ph=document.createElement("div");
-      ph.className="chip";
-      ph.style.opacity=".5";
-      ph.innerHTML=`<img alt=""><div class="text"><div class="t"> </div><div class="a"> </div></div>`;
-      el.recent.appendChild(ph);
-    }
-    lastRecentKey = ""; // tvinga nästa render
-  }
-
-  function renderRecent(items, sourceLabel=""){
-    // key: id@played_at × 3
-    const key = items.map(x=>`${x.id||"-"}@${x.played_at||"-"}`).slice(0,3).join("|");
-    if(key===lastRecentKey){
-      console.debug("[recent] unchanged", sourceLabel, key);
-      return;
-    }
-    lastRecentKey = key;
-
-    el.recent.innerHTML="";
-    const three = items.slice(0,3);
+    const three = (Array.isArray(items)?items:[]).slice(0,3);
     for(const it of three){
       const a=document.createElement("a");
       a.className="chip"; a.href=it.url||"#"; a.target="_blank"; a.rel="noopener";
@@ -163,73 +139,35 @@
     for(let k=three.length;k<3;k++){
       const ph=document.createElement("div"); ph.className="chip"; ph.style.visibility="hidden"; el.recent.appendChild(ph);
     }
-    console.debug("[recent] rendered", sourceLabel, three.map(t=>t.title));
   }
 
-  async function fetchRecent({excludeId, label}){
-    try{
-      if(recCtl) recCtl.abort();
-      recCtl = new AbortController();
-      const qs = excludeId ? `?exclude_id=${encodeURIComponent(excludeId)}` : "";
-      const r = await fetch(API_REC+qs,{cache:"no-store", signal:recCtl.signal});
-      const j = await r.json();
-      let items = Array.isArray(j.items)? j.items : [];
-      console.debug("[recent] fetch", label, "excludeId=", excludeId, "count=", items.length, j);
-
-      // Fallback: om tomt med exclude → prova utan exclude en gång
-      if (excludeId && items.length === 0) {
-        console.debug("[recent] empty with exclude → retry without exclude");
-        const r2 = await fetch(API_REC,{cache:"no-store"});
-        const j2 = await r2.json();
-        items = Array.isArray(j2.items)? j2.items : [];
-        console.debug("[recent] retry result count=", items.length);
-      }
-
-      renderRecent(items, label || "");
-    }catch(e){
-      if (e.name !== "AbortError") console.warn("[recent] fetch error", e);
-    }
-  }
-
-  // Pollar NOW varje sekund; på låtbyte -> cleara & hämta recent
+  // ---- Pollar NOW varje sekund ----
   async function pollNow(){
     try{
       const r = await fetch(API_NOW,{cache:"no-store"});
       const d = await r.json();
       paintNow(d);
-
-      const id = d && d.playing ? d.id : null;
-
-      // Init: hämta recent direkt
-      if (prevNowId === undefined) {
-        prevNowId = id;
-        clearRecentSkeleton();
-        fetchRecent({ excludeId:id, label:"init" });
-        return;
-      }
-
-      // Byte av låt → cleara + hämta recent
-      if (id !== prevNowId) {
-        console.debug("[now] track change", prevNowId, "→", id);
-        prevNowId = id;
-        clearRecentSkeleton();
-        fetchRecent({ excludeId:id, label:"change" });
-      }
     }catch(e){
       console.warn("[now] error", e);
     }
   }
 
-  // Failsafe: hämta recent var 15:e sekund också
-  setInterval(()=> {
-    const id = prevNowId ?? null;
-    fetchRecent({ excludeId:id, label:"interval" });
-  }, 15000);
+  // ---- Pollar RECENT var 2 sekunder (ingen exclude, rakt av) ----
+  async function pollRecent(){
+    try{
+      const r = await fetch(API_REC,{cache:"no-store"});
+      const j = await r.json();
+      console.debug("[recent-simple] count=", (j.items||[]).length, j);
+      renderRecent(j.items||[]);
+    }catch(e){
+      console.warn("[recent-simple] error", e);
+    }
+  }
 
   // Start
-  clearRecentSkeleton();
-  pollNow();
-  setInterval(pollNow, 1000); // Now Playing minst 1 Hz
+  pollNow(); pollRecent();
+  setInterval(pollNow, 1000);
+  setInterval(pollRecent, 2000);
 </script>
 </body>
 </html>
