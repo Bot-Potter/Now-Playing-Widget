@@ -1,7 +1,7 @@
 console.log("[BOOT] app.js vRECENT-SIMPLE", new Date().toISOString());
 
 const API_NOW = "/now-playing";
-const API_REC = "/recent";
+const API_REC = "/recent"; // Byt till "/recent?dupes=1" om du vill se exakta 3 spelningar
 
 const el = {
   cardLink:document.getElementById("cardLink"),
