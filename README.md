@@ -28,4 +28,8 @@ Byggt med:
 ---
 
 ## 📂 Struktur
-
+/public
+index.html ← huvudwidgeten
+overlay.html ← OBS-overlay som triggas av !song
+server.js ← Node.js/Express server + API
+refresh_token.json ← (sparad refresh token från Spotify
