@@ -7,15 +7,13 @@
 <style>
   :root{
     --scale: 1;
-    --pos-x: 50%;              /* 0% vänster, 50% mitt, 100% höger (kan styras via ?pos=) */
-    --offset-bottom: 24px;     /* ?y= */
-    --max-width: 780px;        /* ?w= */
+    --pos-x: 50%;              
+    --offset-bottom: 55px;     /* default nu = 55px */
+    --max-width: 780px;        
     --radius: 18px;
+    --cover: 86px;             
 
-    /* Höjd/skalning via omslagsstorlek (styr med ?h=) */
-    --cover: 86px;             /* ?h=  ex. 96 eller 96px */
-
-    --accent:#c84cff;          /* ersätts från albumet */
+    --accent:#c84cff;          
     --text:#fff; --muted:#e7d9ef;
     --glass: rgba(14,10,18,.85);
     --glass-border: rgba(255,255,255,.15);
@@ -54,9 +52,8 @@
   .cover img{ width:100%; height:100%; border-radius:10px; object-fit:cover; display:block; }
 
   .meta{ min-width:0 }
-  /* Skala typografi lätt med cover-storleken */
   .title{ margin:0; font-weight:900; line-height:1.15;
-          font-size:calc(14px + (var(--cover) * 0.10)); /* ~22px vid 86px */
+          font-size:calc(14px + (var(--cover) * 0.10));
           text-shadow:0 2px 8px rgba(0,0,0,.6); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .artist{ margin:.25rem 0 0; color:var(--muted); font-weight:600; opacity:.96;
            white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
@@ -79,7 +76,6 @@
 
   @media (max-width:560px){
     :root{ --scale:.96 }
-    /* Låt cover vara styrt av ?h även mobilt */
   }
 </style>
 </head>
@@ -104,17 +100,16 @@
   /* ===== URL-parametrar =====
      ?pos=left|center|right
      ?scale=1.0
-     ?y=24                  (px)
-     ?w=780                 (px, %, vw, etc)  -> maxbredd
-     ?h=86                  (px, etc)         -> omslagsstorlek => påverkar höjd/typografi
-     ?blur=0|1              (0 = stäng av blurrad bg, 1 = på)
+     ?y=55                  (px, default 55)
+     ?w=780                 (maxbredd, default 780px)
+     ?h=86                  (coverhöjd, default 86px)
+     ?blur=0|1              (0 = av, 1 = på; default = 1)
      ?dur=10                (sekunder visningstid, default 10)
      ?tick=250              (ms lokaltik)
      ?sync=1000             (ms resync mot server)
   */
   const q = new URLSearchParams(location.search);
 
-  // Hjälpare för CSS-längder: tillåt tal (px default) eller redan formaterade längder.
   const setLengthVar = (name, val, fallbackUnit = "px") => {
     if (!val) return;
     val = String(val).trim();
@@ -130,20 +125,22 @@
   const pos=(q.get("pos")||"center").toLowerCase();
   document.documentElement.style.setProperty("--pos-x", pos==="left"?"0%":pos==="right"?"100%":"50%");
   if(q.get("scale")) document.documentElement.style.setProperty("--scale", q.get("scale"));
-  if(q.get("y"))     setLengthVar("--offset-bottom", q.get("y"));
-  if(q.get("w"))     setLengthVar("--max-width",     q.get("w"));   // ny: bredd
-  if(q.get("h"))     setLengthVar("--cover",         q.get("h"));   // ny: höjd (via omslag)
+  setLengthVar("--offset-bottom", q.get("y") || "55");
+  if(q.get("w")) setLengthVar("--max-width", q.get("w"));
+  if(q.get("h")) setLengthVar("--cover", q.get("h"));
 
-  const useBlur = q.get("blur")==="1";
+  // blur default = 1
+  const useBlur = q.get("blur") !== "0";
+  const $=id=>document.getElementById(id);
+  const el={ tray:$("tray"), card:$("card"), bg:$("bg"), cover:$("cover"),
+             title:$("title"), artist:$("artist"), tStart:$("tStart"), tEnd:$("tEnd"), bar:$("bar"), by:$("by") };
+  if(!useBlur) el.card.classList.add("no-blur");
+
   const DUR_MS  = Math.max(1000, (parseFloat(q.get("dur"))||10)*1000);
   const TICK_MS = Math.max(100, parseInt(q.get("tick")||"250",10));
   const SYNC_MS = Math.max(1000, parseInt(q.get("sync")||"1000",10));
 
   const API_NOW="/now-playing", API_SNAP="/now-snapshot";
-  const $=id=>document.getElementById(id);
-  const el={ tray:$("tray"), card:$("card"), bg:$("bg"), cover:$("cover"),
-             title:$("title"), artist:$("artist"), tStart:$("tStart"), tEnd:$("tEnd"), bar:$("bar"), by:$("by") };
-  if(!useBlur) el.card.classList.add("no-blur");
 
   const ms=x=>{ x=Math.max(0, x|0); const s=Math.floor(x/1000), m=Math.floor(s/60); return `${m}:${String(s%60).padStart(2,"0")}`; };
 
@@ -244,14 +241,12 @@
     showFor(DUR_MS);
   }
 
-  // SSE: triggas från servern när någon skriver !song/!låt
   const es = new EventSource("/events");
   es.addEventListener("song", (ev)=>{
     let by=null; try{ by=JSON.parse(ev.data).by||null; }catch{}
     handleTrigger(by);
   });
 
-  // Snabbtest i browsern: tryck S
   addEventListener("keydown",(e)=>{ if(e.key.toLowerCase()==="s") handleTrigger("debug"); });
 </script>
 </body>
