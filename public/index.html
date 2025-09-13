@@ -5,35 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Nu spelas</title>
 <style>
-  :root{
-    --accent:#f0f0f0; /* Standard offwhite (används bara initialt; vi behåller färg vid paus/inget spelas) */
-    --text:#f6e9f5; --muted:#e9d3f2;
-    --bar-bg:rgba(255,255,255,.16);
-    --radius:18px;
-  }
+  :root{ --accent:#f0f0f0; --text:#f6e9f5; --muted:#e9d3f2; --bar-bg:rgba(255,255,255,.16); --radius:18px; }
   *{box-sizing:border-box} html,body{height:100%}
-  body{
-    margin:0;background:#0b0710;
-    display:grid;place-items:center;
-    font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter;color:var(--text)
-  }
+  body{margin:0;background:#0b0710;display:grid;place-items:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter;color:var(--text)}
   .wrap{width:min(760px,94vw)}
 
-  .card{
-    position:relative;width:100%;
-    padding:18px 22px 20px;border-radius:var(--radius);
-    overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);isolation:isolate;
-    cursor:pointer;text-decoration:none;color:inherit;display:block;
-  }
-  .bg{position:absolute;inset:0;background-size:cover;background-position:center;
-      filter:blur(26px) saturate(130%) brightness(70%);transform:scale(1.12);z-index:-2}
-  .card::after{content:"";position:absolute;inset:0;
-    background:linear-gradient(120deg,rgba(18,8,22,.70),rgba(35,10,35,.42));z-index:-1}
+  .card{position:relative;width:100%;padding:18px 22px 20px;border-radius:var(--radius);
+    overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);isolation:isolate;cursor:pointer;text-decoration:none;color:inherit;display:block}
+  .bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(26px) saturate(130%) brightness(70%);transform:scale(1.12);z-index:-2}
+  .card::after{content:"";position:absolute;inset:0;background:linear-gradient(120deg,rgba(18,8,22,.70),rgba(35,10,35,.42));z-index:-1}
 
   .row{display:flex;align-items:center;gap:18px}
   .cover{width:110px;height:110px;flex:0 0 auto;border-radius:50%;padding:5px;
-    background:radial-gradient(closest-side, color-mix(in oklab, var(--accent) 40%, transparent), transparent 68%), var(--accent);
-    position:relative}
+    background:radial-gradient(closest-side, color-mix(in oklab, var(--accent) 40%, transparent), transparent 68%), var(--accent)}
   .cover img{width:100%;height:100%;display:block;border-radius:50%;object-fit:cover;border:4px solid rgba(255,255,255,.12)}
 
   .meta{flex:1;min-width:0}
@@ -47,29 +31,15 @@
 
   .empty{text-align:center;padding:28px 22px;color:#e0cade;opacity:.85}
 
-  .recent{
-    margin-top:14px;
-    display:grid;
-    grid-template-columns:repeat(3, minmax(0, 1fr));
-    gap:12px;
-    width:100%;
-  }
-  .chip{
-    width:100%;
-    display:flex; gap:10px; align-items:center;
-    padding:10px 12px; border-radius:12px;
-    background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.10);
-    text-decoration:none; color:var(--text); min-width:0; min-height:64px;
-  }
+  .recent{margin-top:14px;display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:12px;width:100%}
+  .chip{width:100%;display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.10);text-decoration:none;color:var(--text);min-width:0;min-height:64px}
   .chip:hover{border-color: color-mix(in oklab, var(--accent) 40%, white 0%)}
   .chip img{width:40px;height:40px;border-radius:8px;object-fit:cover;flex:0 0 auto;background:#222}
   .chip .text{min-width:0}
   .chip .t{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .chip .a{font-size:12px;color:#d7c7df;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.95}
 
-  @media (max-width:560px){
-    .recent{grid-template-columns:repeat(2, minmax(0, 1fr))}
-  }
+  @media (max-width:560px){ .recent{grid-template-columns:repeat(2, minmax(0, 1fr))} }
 </style>
 </head>
 <body>
@@ -142,30 +112,21 @@
   let lastAccent = DEFAULT_ACCENT;
 
   function applyArtwork(imgUrl){
-    lastImage = imgUrl || lastImage;              // ⟵ behåll senaste, ingen placeholder-injektion
+    lastImage = imgUrl || lastImage;      // behåll senaste om ingen ny
     el.cover.src = lastImage;
     el.bg.style.backgroundImage = `url("${lastImage}")`;
     if (imgUrl) {
       dominantColorFromURL(imgUrl).then(c => { lastAccent=c; setAccent(c); });
     } else {
-      // ingen ny bild → behåll befintlig accentfärg
       setAccent(lastAccent);
     }
   }
 
   function showEmpty(){
-    // Visa tomtext men rör inte bild eller accent alls
-    el.content.hidden=true;
-    el.empty.hidden=false;
-
+    el.content.hidden=true; el.empty.hidden=false;
     el.cardLink.href="#";
-    el.tStart.textContent="0:00";
-    el.tEnd.textContent="0:00";
-    el.bar.style.width="0%";
-
-    // Lämna bg/cover/accent oförändrat (ingen placeholder)
-    // currentTrackId kan nollas om du vill att /recent inte ska exkludera den senast spelade:
-    // currentTrackId = null;
+    el.tStart.textContent="0:00"; el.tEnd.textContent="0:00"; el.bar.style.width="0%";
+    // rör inte bg/cover/accent
   }
 
   function showCardBase(d){
@@ -187,26 +148,18 @@
     try{
       const now = await fetchJSON(API_NOW);
       if (now && now.playing) {
-        if (now.id !== currentTrackId) {
-          applyArtwork(now.image || null);
-          currentTrackId = now.id || null;
-        }
+        if (now.id !== currentTrackId) { applyArtwork(now.image || null); currentTrackId = now.id || null; }
         showCardBase(now);
         return;
       }
       const snap = await fetchJSON(API_SNAPSHOT);
       if (snap && snap.playing && snap.id) {
-        if (snap.id !== currentTrackId) {
-          applyArtwork(snap.image || null);
-          currentTrackId = snap.id;
-        }
+        if (snap.id !== currentTrackId) { applyArtwork(snap.image || null); currentTrackId = snap.id; }
         showCardBase(snap);
         return;
       }
       showEmpty();
-    }catch{
-      // behåll senaste vy vid nätverksfel
-    }
+    }catch{}
   }
 
   function renderRecent(list){
@@ -238,19 +191,19 @@
     }catch{}
   }
 
-  function startPoller(fn, periodMs=1000){
+  /* Stabil 2 Hz poller (500 ms) */
+  function startPoller(fn, periodMs=500){
     let next = performance.now();
     async function step(){
       try{ await fn(); }catch{}
       next += periodMs;
-      const delay = Math.max(0, next - performance.now());
-      setTimeout(step, delay);
+      setTimeout(step, Math.max(0, next - performance.now()));
     }
     setTimeout(step, 0);
   }
 
-  startPoller(pollNow, 1000);
-  startPoller(pollRecent, 1000);
+  startPoller(pollNow, 500);
+  startPoller(pollRecent, 500);
 </script>
 </body>
 </html>
