@@ -1,52 +1,52 @@
 <!doctype html>
 <html lang="sv">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Nu spelas</title>
-  <style>
-    :root{ --accent:#c84cff; --text:#f6e9f5; --muted:#e9d3f2; --bar-bg:rgba(255,255,255,.16); --radius:18px; }
-    *{box-sizing:border-box} html,body{height:100%}
-    body{margin:0;background:#0b0710;display:grid;place-items:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter;color:var(--text)}
-    .wrap{width:min(760px,94vw)}
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Nu spelas</title>
+<style>
+  :root{ --accent:#c84cff; --text:#f6e9f5; --muted:#e9d3f2; --bar-bg:rgba(255,255,255,.16); --radius:18px; }
+  *{box-sizing:border-box} html,body{height:100%}
+  body{margin:0;background:#0b0710;display:grid;place-items:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter;color:var(--text)}
+  .wrap{width:min(760px,94vw)}
 
-    .card{
-      position:relative;width:100%;padding:18px 22px 20px;border-radius:var(--radius);
-      overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);isolation:isolate;
-      cursor:pointer;text-decoration:none;color:inherit;display:block
-    }
-    .bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(26px) saturate(130%) brightness(70%);transform:scale(1.12);z-index:-2}
-    .card::after{content:"";position:absolute;inset:0;background:linear-gradient(120deg,rgba(18,8,22,.70),rgba(35,10,35,.42));z-index:-1}
+  .card{
+    position:relative;width:100%;padding:18px 22px 20px;border-radius:var(--radius);
+    overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);isolation:isolate;
+    cursor:pointer;text-decoration:none;color:inherit;display:block
+  }
+  .bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(26px) saturate(130%) brightness(70%);transform:scale(1.12);z-index:-2}
+  .card::after{content:"";position:absolute;inset:0;background:linear-gradient(120deg,rgba(18,8,22,.70),rgba(35,10,35,.42));z-index:-1}
 
-    .row{display:flex;align-items:center;gap:18px}
-    .cover{width:110px;height:110px;flex:0 0 auto;border-radius:50%;padding:5px;
-      background:radial-gradient(closest-side, color-mix(in oklab, var(--accent) 40%, transparent), transparent 68%), var(--accent)}
-    .cover img{width:100%;height:100%;display:block;border-radius:50%;object-fit:cover;border:4px solid rgba(255,255,255,.12)}
+  .row{display:flex;align-items:center;gap:18px}
+  .cover{width:110px;height:110px;flex:0 0 auto;border-radius:50%;padding:5px;
+    background:radial-gradient(closest-side, color-mix(in oklab, var(--accent) 40%, transparent), transparent 68%), var(--accent)}
+  .cover img{width:100%;height:100%;display:block;border-radius:50%;object-fit:cover;border:4px solid rgba(255,255,255,.12)}
 
-    .meta{flex:1;min-width:0}
-    .title{margin:0;font-weight:800;letter-spacing:.2px;font-size:22px;line-height:1.2;text-shadow:0 2px 8px rgba(0,0,0,.35)}
-    .artist{margin:.25rem 0 0;color:var(--muted);font-weight:600;opacity:.95}
+  .meta{flex:1;min-width:0}
+  .title{margin:0;font-weight:800;letter-spacing:.2px;font-size:22px;line-height:1.2;text-shadow:0 2px 8px rgba(0,0,0,.35)}
+  .artist{margin:.25rem 0 0;color:var(--muted);font-weight:600;opacity:.95}
 
-    .times{margin:.9rem 0 .35rem;display:flex;justify-content:space-between;font-variant-numeric:tabular-nums;font-weight:700;color:var(--muted)}
-    .times .right{color:var(--accent)}
-    .progress{height:8px;border-radius:999px;position:relative;overflow:hidden;background:var(--bar-bg)}
-    .bar{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg, color-mix(in oklab, var(--accent) 95%, white 0%), color-mix(in oklab, var(--accent) 70%, white 20%))}
+  .times{margin:.9rem 0 .35rem;display:flex;justify-content:space-between;font-variant-numeric:tabular-nums;font-weight:700;color:var(--muted)}
+  .times .right{color:var(--accent)}
+  .progress{height:8px;border-radius:999px;position:relative;overflow:hidden;background:var(--bar-bg)}
+  .bar{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg, color-mix(in oklab, var(--accent) 95%, white 0%), color-mix(in oklab, var(--accent) 70%, white 20%))}
 
-    .empty{text-align:center;padding:28px 22px;color:#e0cade;opacity:.85}
+  .empty{text-align:center;padding:28px 22px;color:#e0cade;opacity:.85}
 
-    .recent{margin-top:14px;display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:12px;width:100%}
-    .chip{
-      width:100%;display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:12px;
-      background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.10);text-decoration:none;color:var(--text);min-width:0;min-height:64px
-    }
-    .chip:hover{border-color: color-mix(in oklab, var(--accent) 40%, white 0%)}
-    .chip img{width:40px;height:40px;border-radius:8px;object-fit:cover;flex:0 0 auto;background:#222}
-    .chip .text{min-width:0}
-    .chip .t{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .chip .a{font-size:12px;color:#d7c7df;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.95}
+  .recent{margin-top:14px;display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:12px;width:100%}
+  .chip{
+    width:100%;display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:12px;
+    background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.10);text-decoration:none;color:var(--text);min-width:0;min-height:64px
+  }
+  .chip:hover{border-color: color-mix(in oklab, var(--accent) 40%, white 0%)}
+  .chip img{width:40px;height:40px;border-radius:8px;object-fit:cover;flex:0 0 auto;background:#222}
+  .chip .text{min-width:0}
+  .chip .t{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip .a{font-size:12px;color:#d7c7df;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.95}
 
-    @media (max-width:560px){ .recent{grid-template-columns:repeat(2, minmax(0, 1fr))} }
-  </style>
+  @media (max-width:560px){ .recent{grid-template-columns:repeat(2, minmax(0, 1fr))} }
+</style>
 </head>
 <body>
   <div class="wrap">
@@ -69,7 +69,7 @@
 
 <script>
   const API_NOW = "/now-playing";
-  const API_REC = "/recent"; // ändra till "/recent?dupes=1" om du vill tillåta dubbletter
+  const API_REC = "/recent"; // eller "/recent?dupes=1" om du vill visa dubbletter
 
   const el = {
     cardLink:document.getElementById("cardLink"),
@@ -79,7 +79,6 @@
     recent:document.getElementById("recent")
   };
 
-  /* ---------- utils ---------- */
   const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
 
   async function dominantColorFromURL(url){
@@ -102,56 +101,62 @@
   }
   const setAccent=(c)=>document.documentElement.style.setProperty("--accent",c);
 
-  /* ---------- Smooth progress med mjuk resync + pausfrys ---------- */
-  let currentMeta = null;       // senaste kända metadata (titel, bild, osv.)
-  let isPlaying = false;        // spelar just nu
-  let duration = 1;             // ms
-  let targetBase = 0;           // progress_ms vid senaste poll
-  let lastSyncTs = 0;           // Date.now() när vi satte targetBase
-  let displayProg = 0;          // det vi faktiskt renderar (smooth)
+  /* ------- NOW + smooth progress med paus-stöd ------- */
+  let nowData = { playing:false, paused:false };
+  let baseProgress = 0;
+  let duration = 1;
+  let lastPollTs = 0;
   let currentId = null;
   let rafId = 0;
+  let shownProg = 0; // pixel/visningsvärde vi interpolerar till
 
-  // hur snabbt vi får “hinna ikapp” serverns tid (ms per frame)
-  // högre => snabbare korrigering, men risk för synlig ryckighet. 40–80 funkar bra.
-  const MAX_CORRECTION_PER_FRAME = 60;
-
-  function paintStatic(meta){
-    if(!meta){
+  function paintNowStatic(d){
+    if(!d || (!d.playing && !d.paused)){ // varken spelas eller pausad -> tom vy
       el.content.hidden=true; el.empty.hidden=false; el.bg.style.backgroundImage="";
       el.cardLink.href="#"; el.bar.style.width="0%"; el.tStart.textContent="0:00"; el.tEnd.textContent="0:00";
       return;
     }
     el.content.hidden=false; el.empty.hidden=true;
 
-    el.title.textContent=meta.title||"Okänd låt";
-    el.artist.textContent=(meta.artists||[]).join(", ")||meta.album||"";
-    el.tEnd.textContent=ms(duration||0);
+    el.title.textContent=d.title||"Okänd låt";
+    el.artist.textContent=(d.artists||[]).join(", ")||d.album||"";
+    el.tEnd.textContent=ms(d.duration_ms||0);
 
-    if(meta.image){
-      el.cover.src=meta.image;
-      el.bg.style.backgroundImage=`url("${meta.image}")`;
-      dominantColorFromURL(meta.image).then(setAccent);
+    if(d.image){
+      el.cover.src=d.image;
+      el.bg.style.backgroundImage=`url("${d.image}")`;
+      dominantColorFromURL(d.image).then(setAccent);
     }
-    el.cardLink.href = meta.url || "#";
+    el.cardLink.href = d.url || "#";
   }
 
   function tick(){
-    // Räkna ut "målprogress"
-    const elapsed = Math.max(0, Date.now() - lastSyncTs);
-    const targetNow = isPlaying ? targetBase + elapsed : targetBase; // frys när paus
-
-    // Korrigera mjukt mot targetNow (ingen back-jump)
-    let diff = targetNow - displayProg;
-    const step = Math.sign(diff) * Math.min(Math.abs(diff), MAX_CORRECTION_PER_FRAME);
-
-    displayProg = Math.max(0, Math.min(duration, displayProg + step));
-
-    // Render
-    if (currentMeta){
-      el.tStart.textContent = ms(displayProg);
-      el.bar.style.width = (100 * displayProg / duration) + "%";
+    // Om pausad: håll tiden stilla på serverprogressen (ingen tick)
+    if (nowData.paused) {
+      const prog = Math.min(duration, Math.max(0, baseProgress));
+      shownProg = prog;
+      el.tStart.textContent = ms(prog);
+      el.bar.style.width = (100 * prog / duration) + "%";
+      rafId = requestAnimationFrame(tick);
+      return;
     }
+
+    // Om inte spelar: håll av
+    if(!nowData.playing){
+      rafId = requestAnimationFrame(tick);
+      return;
+    }
+
+    // “Safety lag” så vi inte springer före servern och hoppar bak.
+    const elapsed = Math.max(0, Date.now() - lastPollTs - 120); // -120ms buffert
+    const est = Math.min(duration, Math.max(0, baseProgress + elapsed));
+
+    // Liten mjuk interpolation mot est för extra smooth (undviker mikrodarr).
+    // 0.25 = 25% av gapet per frame → ca 4 frames till nytt värde.
+    shownProg += (est - shownProg) * 0.25;
+
+    el.tStart.textContent = ms(shownProg);
+    el.bar.style.width = (100 * shownProg / duration) + "%";
 
     rafId = requestAnimationFrame(tick);
   }
@@ -160,54 +165,38 @@
     try{
       const r = await fetch(API_NOW, { cache:"no-store" });
       const d = await r.json();
+      nowData = d || { playing:false, paused:false };
 
-      if (!d || !d.playing) {
-        // PAUS / INTE SPELAS:
-        // - behåll currentMeta om vi redan har något (visa fryst progress)
-        // - frys targetBase på senaste kända displayProg så vi inte hoppar till 0
-        isPlaying = false;
-
-        if (currentMeta){
-          targetBase = displayProg;   // frys där vi är
-          lastSyncTs = Date.now();    // nollar elapsed
-          // OBS: vi kallar INTE paintStatic(null) – vi vill fortsätta visa kortet
-        } else {
-          // inget att visa ännu (aldrig spelat), visa "tomt"
-          paintStatic(null);
-        }
+      // Varken spelas eller pausad -> tomvy
+      if(!d || (!d.playing && !d.paused)){
+        currentId = null; baseProgress=0; duration=1; lastPollTs=Date.now(); shownProg=0;
+        paintNowStatic(d);
         return;
       }
 
-      // SPELAR:
-      isPlaying = true;
-
-      // metadata för kortet
-      const meta = {
-        id: d.id, title: d.title, artists: d.artists, album: d.album,
-        url: d.url, image: d.image
-      };
-
-      // låtbyte → uppdatera UI direkt
-      if (meta.id !== currentId){
-        currentId = meta.id;
-        currentMeta = meta;
-        duration = Math.max(1, d.duration_ms || 1);
-        paintStatic(meta);
-        // direkt sätt displayProg nära serverprogress för seamless start
-        displayProg = Math.min(duration, Math.max(0, d.progress_ms || 0));
+      // Track-byte?
+      if(d.id !== currentId){
+        currentId = d.id;
+        paintNowStatic(d);
       }
 
-      // resyncmål sätts alltid – men vi undviker bakåtsprång pga mjuk korrigering i tick()
-      duration   = Math.max(1, d.duration_ms || 1);
-      targetBase = Math.min(duration, Math.max(0, d.progress_ms || 0));
-      lastSyncTs = Date.now();
+      duration     = Math.max(1, d.duration_ms || 1);
+      // Vid pausad: använd progress rakt av (ingen tickning)
+      // Vid spelning: resynka basprogress från servern
+      const serverProg = Math.min(duration, Math.max(0, d.progress_ms || 0));
 
-    }catch(e){
-      // nätverksglitch → gör inget, tick fortsätter på senaste kända data
-    }
+      // Om vårt visade värde ligger långt framför (t.ex. >400ms), snappa ner direkt:
+      if (shownProg - serverProg > 400) {
+        shownProg = serverProg;
+      }
+
+      baseProgress = serverProg;
+      lastPollTs   = Date.now();
+
+    }catch(e){ /* ignore */ }
   }
 
-  /* ---------- RECENT (oförändrad render, uppdateras 1 Hz) ---------- */
+  /* ---------------- Recent ---------------- */
   let lastRecentKey = "";
   function renderRecent(list){
     const ids = list.map(x => x.id || "-");
@@ -237,7 +226,7 @@
 
   async function pollRecent(){
     try{
-      const exclude = currentId ? `?exclude_id=${encodeURIComponent(currentId)}` : "";
+      const exclude = nowData?.id ? `?exclude_id=${encodeURIComponent(nowData.id)}` : "";
       const r = await fetch(API_REC + exclude, { cache:"no-store" });
       const data = await r.json();
       const list = Array.isArray(data.items) ? data.items : [];
@@ -245,21 +234,17 @@
     }catch{}
   }
 
-  /* ---------- Visibility: resynka när fliken återkommer ---------- */
   function onVis(){
     if(document.visibilityState === "visible"){
-      // hämta färsk data och sätt targetBase exakt
       pollNow(); pollRecent();
-      lastSyncTs = Date.now();
     }
   }
   document.addEventListener("visibilitychange", onVis);
 
-  /* ---------- start ---------- */
+  /* start */
   pollNow(); pollRecent();
   setInterval(pollNow, 1000);
   setInterval(pollRecent, 1000);
-
   cancelAnimationFrame(rafId);
   rafId = requestAnimationFrame(tick);
 </script>
