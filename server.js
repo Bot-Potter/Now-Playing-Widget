@@ -1,4 +1,4 @@
-// server.js
+// server.js (recent byggs av now-playing snapshots)
 import express from "express";
 import fetch from "node-fetch";
 import dotenv from "dotenv";
@@ -24,32 +24,35 @@ const {
   ADMIN_SECRET
 } = process.env;
 
-/* ---------------- Helpers ---------------- */
-const TOKEN_FILE = path.join(process.cwd(), "refresh_token.json");
+/* --------------------------------- Helpers -------------------------------- */
+const DATA_DIR = process.cwd();
+const TOKEN_FILE = path.join(DATA_DIR, "refresh_token.json");
+const PLAYS_FILE = path.join(DATA_DIR, "plays.log.jsonl");  // JSON Lines för enkel persistens
 const noStore = (res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   res.set("Pragma", "no-cache");
 };
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const toMs = (iso) => new Date(iso).getTime() || 0;
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
-/* ---------------- Server-side OAuth state ---------------- */
-const pendingStates = new Map();
+/* ----------------------- OAuth state (cookie-less) ------------------------ */
 const STATE_TTL_MS = 10 * 60 * 1000;
-
-function newState() { return crypto.randomBytes(16).toString("hex"); }
-function addState(st) { pendingStates.set(st, Date.now() + STATE_TTL_MS); }
-function consumeState(st) {
-  const exp = pendingStates.get(st);
+const pendingStates = new Map();          // state -> expiresAt
+const newState = () => crypto.randomBytes(16).toString("hex");
+const addState = (s) => pendingStates.set(s, Date.now() + STATE_TTL_MS);
+const consumeState = (s) => {
+  const exp = pendingStates.get(s);
   if (!exp) return false;
-  pendingStates.delete(st);
+  pendingStates.delete(s);
   return exp > Date.now();
-}
+};
 setInterval(() => {
   const now = Date.now();
   for (const [k, exp] of pendingStates.entries()) if (exp <= now) pendingStates.delete(k);
 }, 60_000);
 
-/* ---------------- Refresh token hantering ---------------- */
+/* --------------------------- Refresh-token källor ------------------------- */
 let OVERRIDE_REFRESH = null;
 const loadRefresh = () => {
   if (OVERRIDE_REFRESH) return OVERRIDE_REFRESH;
@@ -57,7 +60,7 @@ const loadRefresh = () => {
   try { return JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8")).refresh_token; } catch { return null; }
 };
 
-/* ---------------- Spotify OAuth ---------------- */
+/* ------------------------------ Spotify OAuth ----------------------------- */
 app.get("/login", (_req, res) => {
   if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET || !SPOTIFY_REDIRECT_URI) {
     return res.status(500).send("Missing Spotify ENV vars");
@@ -65,6 +68,7 @@ app.get("/login", (_req, res) => {
   const scopes = [
     "user-read-currently-playing",
     "user-read-playback-state",
+    // OBS: vi använder inte längre /recently-played, men scope gör inget.
     "user-read-recently-played"
   ].join(" ");
 
@@ -78,7 +82,6 @@ app.get("/login", (_req, res) => {
     redirect_uri: SPOTIFY_REDIRECT_URI,
     state
   });
-
   res.redirect("https://accounts.spotify.com/authorize?" + params.toString());
 });
 
@@ -107,26 +110,25 @@ app.get("/callback", async (req, res) => {
     if (!r.ok || !data) return res.status(400).send("Token error: " + text);
 
     const rt = data.refresh_token;
-    if (!rt) {
-      return res.status(400).send("Ingen refresh_token i svaret. Ta bort access i Spotify Account > Apps och prova igen.");
-    }
+    if (!rt) return res.status(400).send("Ingen refresh_token i svaret. Ta bort access i Spotify Account > Apps och prova igen.");
 
     try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ refresh_token: rt }, null, 2)); } catch {}
+
     res.send(`
-      <style>body{font-family:system-ui;padding:24px}</style>
+      <style>body{font-family:system-ui;padding:24px;line-height:1.45}</style>
       <h2>Klart!</h2>
-      <p>Kopiera refresh tokenen och lägg den som <code>REFRESH_TOKEN</code> i Render (eller använd /admin/set-refresh).</p>
+      <p>Lägg denna som <code>REFRESH_TOKEN</code> i Render (eller POST:a till <code>/admin/set-refresh</code>):</p>
       <pre style="background:#111;color:#0f0;padding:12px;border-radius:8px">${rt}</pre>
       <p>Scopes beviljade:</p>
-      <pre>${(data.scope||"").split(" ").join("\n")}</pre>
-      <p>Testa sedan <a href="/whoami">/whoami</a></p>
+      <pre>${(data.scope||"").split(" ").join("\\n")}</pre>
+      <p>Testa sedan <a href="/whoami">/whoami</a>.</p>
     `);
   } catch (e) {
     res.status(500).send("Callback error: " + e.message);
   }
 });
 
-/* ---------------- Spotify Access Token ---------------- */
+/* --------------------------- Access token via RT -------------------------- */
 async function getAccessToken() {
   const refresh_token = loadRefresh();
   if (!refresh_token) return null;
@@ -135,261 +137,282 @@ async function getAccessToken() {
   const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token });
 
   const r = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST", headers: { Authorization: auth, "Content-Type": "application/x-www-form-urlencoded" }, body
+    method: "POST",
+    headers: { Authorization: auth, "Content-Type": "application/x-www-form-urlencoded" },
+    body
   });
   if (!r.ok) return null;
   const data = await r.json();
   return data.access_token || null;
 }
 
-/* ---------------- Now Playing ---------------- */
-let lastNow = { playing: false };
+/* ============================ Playback-snapshot =========================== */
+/**
+ * Vi kör en bakgrunds-LOOP som hämtar /currently-playing ca 1 Hz.
+ * - Upptäcker låtbyten och pushar föregående låt till en "plays"-logg.
+ * - Beräknar starttid = now - progress_ms.
+ * - Filtrerar bort superkorta lyssningar (< MIN_LISTEN_MS).
+ * - Persistens: JSON Lines + ringbuffer i minnet.
+ * - /recent bygger helt på denna logg (inte på Spotify /recently-played).
+ *
+ * Viktigt: respektera 429 Retry-After vid rate limit. (Officiella docs)
+ * https://developer.spotify.com/documentation/web-api/concepts/rate-limits
+ */
+const MIN_LISTEN_MS = 5000;        // lägsta lyssning för att räkna som "spelas"
+const PLAYS_MAX = 500;             // max poster i minnesbuffer
+const PLAYS_RETENTION_DAYS = 14;   // äldre än så dumpas (policyvänligt)
+const POLL_INTERVAL_MS = 1000;
 
-app.get("/now-playing", async (_req, res) => {
+let plays = [];           // nyast först
+const seenKeys = new Set(); // id@started_at
+function prunePlays() {
+  const cutoff = Date.now() - PLAYS_RETENTION_DAYS*24*3600*1000;
+  plays = plays.filter(p => toMs(p.started_at) >= cutoff).slice(0, PLAYS_MAX);
+  // bygga om seenKeys för att undvika att den växer utan gräns
+  seenKeys.clear();
+  for (const p of plays) seenKeys.add(`${p.id}@${p.started_at}`);
+}
+function loadPlaysFromDisk() {
+  try {
+    if (!fs.existsSync(PLAYS_FILE)) return;
+    const rows = fs.readFileSync(PLAYS_FILE, "utf8").trim().split("\n").filter(Boolean);
+    const acc = [];
+    for (const line of rows.slice(-1000)) { // läs bara sista 1000 för fart
+      try { acc.push(JSON.parse(line)); } catch {}
+    }
+    acc.sort((a,b)=> toMs(b.started_at)-toMs(a.started_at));
+    plays = acc.slice(0, PLAYS_MAX);
+    for (const p of plays) seenKeys.add(`${p.id}@${p.started_at}`);
+    prunePlays();
+    console.log("[plays] loaded", plays.length);
+  } catch (e) {
+    console.warn("[plays] load error", e.message);
+  }
+}
+function appendPlay(p) {
+  const key = `${p.id}@${p.started_at}`;
+  if (seenKeys.has(key)) return;
+  seenKeys.add(key);
+  plays.unshift(p);
+  prunePlays();
+  try { fs.appendFileSync(PLAYS_FILE, JSON.stringify(p) + "\n"); } catch {}
+}
+
+let lastNow = { playing:false };   // exponeras via /now-playing (snapshot)
+let lastTrack = null;              // internt: {id,title,artists, image,url, duration_ms, start_ts, last_seen_ts, progress_ms}
+
+let pollingStarted = false;
+let backoffUntil = 0;
+
+async function pollLoop() {
+  if (pollingStarted) return;
+  pollingStarted = true;
+
+  for (;;) {
+    const now = Date.now();
+    if (now < backoffUntil) {
+      await sleep(backoffUntil - now);
+      continue;
+    }
+    try {
+      const at = await getAccessToken();
+      if (!at) {
+        lastNow = { playing:false };
+        await sleep(2000);
+        continue;
+      }
+
+      const r = await fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track", {
+        headers: { Authorization: `Bearer ${at}` }
+      });
+
+      if (r.status === 429) {
+        const ra = Number(r.headers.get("retry-after") || 5);
+        backoffUntil = Date.now() + clamp(ra, 1, 3600) * 1000;
+        continue;
+      }
+
+      if (r.status === 204) {
+        // Ingenting spelas – om vi hade en pågående track, gör inget (vi loggar på riktig låtbyte)
+        lastNow = { playing:false };
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
+
+      if (!r.ok) {
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
+
+      const json = await r.json();
+      if (!json?.is_playing || !json?.item) {
+        lastNow = { playing:false };
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
+
+      const item = json.item;
+      const progress_ms = json.progress_ms || 0;
+      const duration_ms = item.duration_ms || 0;
+      const start_ts = Date.now() - progress_ms;
+
+      const current = {
+        id: item.id || "",
+        title: item.name || "",
+        artists: (item.artists||[]).map(a=>a.name),
+        album: item.album?.name || "",
+        url: item.external_urls?.spotify || "",
+        image: item.album?.images?.[0]?.url || "",
+        duration_ms,
+        progress_ms,
+        start_ts,
+        last_seen_ts: Date.now()
+      };
+
+      // LÅTBYTE? (olika ID)
+      if (lastTrack?.id && current.id !== lastTrack.id) {
+        // lägg in lastTrack som spelad om den varat tillräckligt länge
+        const listened = (lastTrack.last_seen_ts || Date.now()) - (lastTrack.start_ts || Date.now());
+        if (listened >= MIN_LISTEN_MS) {
+          appendPlay({
+            id: lastTrack.id,
+            title: lastTrack.title,
+            artists: lastTrack.artists,
+            image: lastTrack.image,
+            url: lastTrack.url,
+            started_at: new Date(lastTrack.start_ts).toISOString(),
+            ended_at: new Date((lastTrack.start_ts || Date.now()) + (lastTrack.duration_ms || listened)).toISOString(),
+            listened_ms: listened
+          });
+        }
+      } else if (lastTrack?.id === current.id) {
+        // Samma låt – om användaren backat i låten (progress minskar), uppdatera start_ts
+        if (typeof lastTrack.progress_ms === "number" && progress_ms + 1500 < lastTrack.progress_ms) {
+          current.start_ts = Date.now() - progress_ms; // redan satt
+        } else {
+          // behåll ursprungligt start_ts om vi haft det längre
+          current.start_ts = Math.min(current.start_ts, lastTrack.start_ts || current.start_ts);
+        }
+      }
+
+      lastTrack = current;
+
+      // Uppdatera publikt snapshot för /now-playing
+      lastNow = {
+        playing: true,
+        type: "track",
+        id: current.id,
+        title: current.title,
+        artists: current.artists,
+        album: current.album,
+        url: current.url,
+        image: current.image,
+        progress_ms: progress_ms,
+        duration_ms: duration_ms
+      };
+
+    } catch (e) {
+      // swallow
+    }
+
+    await sleep(POLL_INTERVAL_MS);
+  }
+}
+
+loadPlaysFromDisk();
+pollLoop();
+
+/* ----------------------------- Publika endpoints -------------------------- */
+
+// Nuvarande snapshot – ingen Spotify-call här: vi läser från lastNow
+app.get("/now-playing", (req, res) => {
+  noStore(res);
+  res.json(lastNow || { playing:false });
+});
+
+// Våra egna “recent”: byggda av plays-loggen
+// - default: unika låtar (som du ville tidigare)
+// - ?dupes=1 => exakt tre senaste spelningarna (även samma låt flera gånger i rad)
+// - ?limit=3 (valfri, default 3)
+app.get("/recent", (req, res) => {
+  noStore(res);
+  let limit = clamp(parseInt(req.query.limit || "3", 10) || 3, 1, 50);
+  const allowDupes = String(req.query.dupes||"").toLowerCase() === "1" || String(req.query.distinct||"") === "0";
+  const excludeId = (req.query.exclude_id || "").trim();
+
+  // sortera nyast först (plays är redan nyast först, men defensivt)
+  const items = [...plays].sort((a,b)=> toMs(b.started_at)-toMs(a.started_at));
+
+  const out = [];
+  const seen = new Set();
+  for (const p of items) {
+    if (!p.id) continue;
+    if (excludeId && p.id === excludeId) continue;
+    if (!allowDupes) {
+      if (seen.has(p.id)) continue;
+      seen.add(p.id);
+    }
+    out.push({
+      id: p.id,
+      title: p.title,
+      artists: p.artists,
+      image: p.image,
+      url: p.url,
+      played_at: p.started_at
+    });
+    if (out.length >= limit) break;
+  }
+  res.json({ items: out });
+});
+
+// Rå dump för insyn
+app.get("/recent/raw", (_req, res) => {
+  noStore(res);
+  res.json({ count: plays.length, items: plays.slice(0, 50) });
+});
+
+// Diagnos – vem är inloggad osv.
+app.get("/whoami", async (_req, res) => {
   noStore(res);
   try {
     const at = await getAccessToken();
-    if (!at) { lastNow = { playing:false }; return res.json({ playing:false }); }
-
-    const r = await fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track", {
-      headers: { Authorization: `Bearer ${at}` }
-    });
-
-    if (r.status === 204) { lastNow = { playing:false }; return res.json({ playing:false }); }
-    if (!r.ok) { lastNow = { playing:false }; return res.json({ playing:false }); }
-
-    const json = await r.json();
-    if (!json?.is_playing) { lastNow = { playing:false }; return res.json({ playing:false }); }
-
-    const item = json.item || {};
-    const img = item.album?.images?.[0]?.url || "";
-    const payload = {
-      playing: true,
-      type: "track",
-      id: item.id || "",
-      title: item.name || "",
-      artists: (item.artists||[]).map(a => a.name),
-      album: item.album?.name || "",
-      url: item.external_urls?.spotify || "",
-      image: img,
-      progress_ms: json.progress_ms || 0,
-      duration_ms: item.duration_ms || 0
-    };
-
-    lastNow = payload;
-    res.json(payload);
+    if (!at) return res.status(400).json({ ok:false, error:"no_access_token" });
+    const r = await fetch("https://api.spotify.com/v1/me", { headers: { Authorization: `Bearer ${at}` }});
+    const ct = r.headers.get("content-type") || "";
+    const bodyText = await r.text();
+    let bodyJson = null; try { bodyJson = JSON.parse(bodyText); } catch {}
+    if (!r.ok) return res.status(r.status).json({ ok:false, status:r.status, content_type: ct, error: bodyJson || bodyText.slice(0,200) });
+    return res.json({ ok:true, id: bodyJson.id, display_name: bodyJson.display_name, product: bodyJson.product, country: bodyJson.country });
   } catch (e) {
-    lastNow = { playing:false };
-    res.json({ playing:false, error:e.message });
+    return res.status(500).json({ ok:false, error:String(e) });
   }
 });
 
-/* ---------------- Recent Played: färskt varje gång ---------------- */
-async function fetchRecentRaw(limit = 50) {
-  const at = await getAccessToken();
-  if (!at) return { ok:false, status:401, headers:{}, body:null };
-
-  const url = new URL("https://api.spotify.com/v1/me/player/recently-played");
-  url.searchParams.set("limit", String(Math.min(Math.max(limit, 1), 50)));
-
-  const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${at}` } });
-  const ct = r.headers.get("content-type") || "";
-  const headers = {
-    date: r.headers.get("date"),
-    content_type: ct,
-    cache_control: r.headers.get("cache-control"),
-    retry_after: r.headers.get("retry-after"),
-    spotify_trace_id: r.headers.get("spotify-trace-id")
-  };
-
-  const text = await r.text();
-  let body = null;
-  try { body = JSON.parse(text); } catch { body = text; }
-
-  return { ok: r.ok, status: r.status, headers, body };
-}
-
-// /recent – topp 3; default = unika låtar. ?dupes=1 för exakta 3 senaste spelningarna
-app.get("/recent", async (req, res) => {
-  noStore(res);
-  try {
-    const allowDupes = String(req.query.dupes||"").toLowerCase() === "1" || String(req.query.distinct||"") === "0";
-    const excludeId = (req.query.exclude_id || "").trim();
-
-    const out = await fetchRecentRaw(50);
-    if (!out.ok || !out.body || !Array.isArray(out.body.items)) {
-      return res.status(out.status || 500).json({ items: [], error: out.body || "recent_fetch_failed", meta: out.headers });
-    }
-
-    const mapped = out.body.items
-      .filter(it => it?.track?.id && it?.played_at)
-      .map(it => ({
-        id: it.track.id,
-        title: it.track.name || "",
-        artists: (it.track.artists || []).map(a => a.name),
-        image: it.track.album?.images?.[0]?.url || "",
-        url: it.track.external_urls?.spotify || "",
-        played_at: it.played_at
-      }))
-      .sort((a, b) => toMs(b.played_at) - toMs(a.played_at));
-
-    const result = [];
-    const seen = new Set();
-    for (const it of mapped) {
-      if (excludeId && it.id === excludeId) continue;
-      if (!allowDupes) {
-        if (seen.has(it.id)) continue;
-        seen.add(it.id);
-      }
-      result.push(it);
-      if (result.length >= 3) break;
-    }
-    return res.json({ items: result });
-  } catch (e) {
-    return res.json({ items: [], error: String(e) });
-  }
+/* ------------------------------ Admin utils ------------------------------- */
+app.get("/env-check", (_req, res) => {
+  const fromEnv = !!process.env.REFRESH_TOKEN;
+  const len = process.env.REFRESH_TOKEN ? process.env.REFRESH_TOKEN.length : 0;
+  res.json({ has_env_refresh: fromEnv, env_refresh_len: len, has_override: !!OVERRIDE_REFRESH });
 });
 
-// Raw & diagnose
-app.get("/recent/raw", async (_req, res) => {
-  noStore(res);
-  const out = await fetchRecentRaw(20);
-  return res.status(out.status || 500).json(out);
+app.post("/admin/set-refresh", express.text({ type: "*/*" }), (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) return res.status(401).send("unauthorized");
+  const rt = (req.body || "").trim();
+  if (!rt) return res.status(400).send("missing token");
+  OVERRIDE_REFRESH = rt;
+  console.log("[admin] REFRESH_TOKEN override set (len=%d)", rt.length);
+  res.send("ok");
 });
 
-app.get("/recent/diagnose", async (_req, res) => {
-  noStore(res);
-  try {
-    const who = await (async () => {
-      const at = await getAccessToken();
-      if (!at) return null;
-      const r = await fetch("https://api.spotify.com/v1/me", { headers: { Authorization: `Bearer ${at}` } });
-      if (!r.ok) return null;
-      return r.json();
-    })();
-
-    const now = lastNow;
-    const out = await fetchRecentRaw(10);
-    const items = Array.isArray(out.body?.items) ? out.body.items : [];
-
-    const mapped = items
-      .filter(it => it?.track?.id && it?.played_at)
-      .map(it => ({
-        id: it.track.id,
-        title: it.track.name,
-        artists: (it.track.artists||[]).map(a=>a.name),
-        played_at: it.played_at,
-        ago_s: Math.round((Date.now() - toMs(it.played_at)) / 1000)
-      }))
-      .sort((a,b)=> toMs(b.played_at)-toMs(a.played_at));
-
-    const nowInRecent = now?.playing ? mapped.some(x => x.id === now.id) : false;
-
-    res.json({
-      ok: true,
-      whoami: who ? { id: who.id, name: who.display_name, product: who.product } : null,
-      now,
-      now_in_recent: nowInRecent,
-      recent_count: mapped.length,
-      recent_top: mapped.slice(0,10),
-      raw_meta: { status: out.status, headers: out.headers }
-    });
-  } catch (e) {
-    res.status(500).json({ ok:false, error:String(e) });
-  }
+app.post("/admin/clear-plays", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) return res.status(401).send("unauthorized");
+  plays = [];
+  seenKeys.clear();
+  try { fs.unlinkSync(PLAYS_FILE); } catch {}
+  res.json({ ok:true, cleared:true });
 });
 
-/* ========== RECENT DIAGNOS — PROBE & STREAM ========== */
-app.get("/recent/probe", async (req, res) => {
-  res.set("Cache-Control", "no-store");
-  const seconds = Math.max(5, Math.min(300, Number(req.query.seconds) || 60));
-  const interval = Math.max(1, Math.min(10, Number(req.query.interval) || 5));
-
-  const samples = [];
-  const start = Date.now();
-  const until = start + seconds * 1000;
-
-  while (Date.now() < until) {
-    const out = await fetchRecentRaw(10);
-    let top = null;
-    if (out.ok && Array.isArray(out.body?.items)) {
-      const mapped = out.body.items
-        .filter(it => it?.track?.id && it?.played_at)
-        .map(it => ({
-          id: it.track.id,
-          title: it.track.name || "",
-          artists: (it.track.artists||[]).map(a=>a.name),
-          played_at: it.played_at
-        }))
-        .sort((a,b)=> new Date(b.played_at) - new Date(a.played_at));
-      top = mapped[0] || null;
-    }
-    samples.push({
-      t: new Date().toISOString(),
-      ok: out.ok,
-      status: out.status,
-      top
-    });
-    if (Date.now() + interval*1000 < until) {
-      await new Promise(r => setTimeout(r, interval*1000));
-    }
-  }
-
-  return res.json({
-    ok: true,
-    seconds,
-    interval,
-    count: samples.length,
-    samples
-  });
-});
-
-const recentSSEClients = new Set();
-let lastTopKey = null;
-let recentStreamerStarted = false;
-
-app.get("/recent/stream", (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Connection", "keep-alive");
-  res.flushHeaders?.();
-  res.write(`: connected\n\n`);
-
-  recentSSEClients.add(res);
-  req.on("close", () => { recentSSEClients.delete(res); });
-
-  if (!recentStreamerStarted) {
-    recentStreamerStarted = true;
-    (async function loop() {
-      for (;;) {
-        try {
-          const out = await fetchRecentRaw(10);
-          if (out.ok && Array.isArray(out.body?.items) && out.body.items.length) {
-            const top = out.body.items
-              .filter(it => it?.track?.id && it?.played_at)
-              .map(it => ({
-                id: it.track.id,
-                title: it.track.name || "",
-                artists: (it.track.artists||[]).map(a=>a.name),
-                played_at: it.played_at
-              }))
-              .sort((a,b)=> new Date(b.played_at) - new Date(a.played_at))[0];
-
-            const key = top ? `${top.id}@${top.played_at}` : null;
-            if (key && key !== lastTopKey) {
-              lastTopKey = key;
-              const data = `event: change\ndata: ${JSON.stringify({ top, at: Date.now() })}\n\n`;
-              for (const c of recentSSEClients) if (!c.writableEnded) c.write(data);
-            }
-          }
-        } catch {}
-        await new Promise(r => setTimeout(r, 5000));
-      }
-    })();
-  }
-});
-
-/* ---------------- SSE för overlay (Twitch !song) ---------------- */
+/* --------------------------- SSE (Twitch/Overlay) ------------------------- */
 const sseClients = new Set();
 app.get("/events", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
@@ -406,12 +429,10 @@ app.get("/events", (req, res) => {
 });
 function broadcastSSE(type, payload) {
   const data = `event: ${type}\n` + `data: ${JSON.stringify(payload)}\n\n`;
-  for (const client of sseClients) {
-    if (!client.writableEnded) client.write(data);
-  }
+  for (const client of sseClients) if (!client.writableEnded) client.write(data);
 }
 
-/* ---------------- Twitch listener ---------------- */
+/* ------------------------------ Twitch listener --------------------------- */
 if (TWITCH_USERNAME && TWITCH_OAUTH_TOKEN && TWITCH_CHANNEL) {
   const tmiClient = new tmi.Client({
     identity: { username: TWITCH_USERNAME, password: TWITCH_OAUTH_TOKEN },
@@ -421,7 +442,7 @@ if (TWITCH_USERNAME && TWITCH_OAUTH_TOKEN && TWITCH_CHANNEL) {
     console.log(`[tmi] Connected to #${TWITCH_CHANNEL}`)
   ).catch(err => console.error("[tmi] connect error", err));
 
-  const SONG_CMD = /^(?:!song|!låt)\b/i;
+  const SONG_CMD = /^(?:!song|!l\u00E5t)\b/i;
   tmiClient.on("message", (_channel, userstate, message, self) => {
     if (self) return;
     if (SONG_CMD.test(message)) {
@@ -434,71 +455,7 @@ if (TWITCH_USERNAME && TWITCH_OAUTH_TOKEN && TWITCH_CHANNEL) {
   console.warn("[tmi] Twitch vars missing, skipping chat listener");
 }
 
-/* ---------------- Admin & Debug ---------------- */
-app.get("/whoami", async (_req, res) => {
-  noStore(res);
-  try {
-    const at = await getAccessToken();
-    if (!at) return res.status(400).json({ ok:false, error:"no_access_token" });
-
-    const r = await fetch("https://api.spotify.com/v1/me", {
-      headers: { Authorization: `Bearer ${at}` }
-    });
-
-    const ct = r.headers.get("content-type") || "";
-    const bodyText = await r.text();
-    let bodyJson = null;
-    try { bodyJson = JSON.parse(bodyText); } catch {}
-
-    if (!r.ok) {
-      return res.status(r.status).json({
-        ok:false,
-        status:r.status,
-        content_type: ct,
-        error: bodyJson || bodyText.slice(0,200)
-      });
-    }
-
-    if (bodyJson) {
-      return res.json({
-        ok:true,
-        id: bodyJson.id,
-        display_name: bodyJson.display_name,
-        product: bodyJson.product,
-        country: bodyJson.country
-      });
-    } else {
-      return res.json({
-        ok:false,
-        status:r.status,
-        content_type: ct,
-        error: "non_json_response",
-        snippet: bodyText.slice(0,200)
-      });
-    }
-  } catch (e) {
-    return res.status(500).json({ ok:false, error:String(e) });
-  }
-});
-
-app.get("/env-check", (_req, res) => {
-  const fromEnv = !!process.env.REFRESH_TOKEN;
-  const len = process.env.REFRESH_TOKEN ? process.env.REFRESH_TOKEN.length : 0;
-  res.json({ has_env_refresh: fromEnv, env_refresh_len: len, has_override: !!OVERRIDE_REFRESH });
-});
-
-app.post("/admin/set-refresh", express.text({ type: "*/*" }), (req, res) => {
-  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
-    return res.status(401).send("unauthorized");
-  }
-  const rt = (req.body || "").trim();
-  if (!rt) return res.status(400).send("missing token");
-  OVERRIDE_REFRESH = rt;
-  console.log("[admin] REFRESH_TOKEN override set (len=%d)", rt.length);
-  res.send("ok");
-});
-
-/* ---------------- Health ---------------- */
+/* --------------------------------- Health --------------------------------- */
 app.get("/healthz", (_req, res) => res.send("ok"));
 
 app.listen(PORT, () => {
