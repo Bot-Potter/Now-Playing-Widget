@@ -30,6 +30,7 @@ const noStore = (res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   res.set("Pragma", "no-cache");
 };
+const toMs = (iso) => new Date(iso).getTime() || 0;
 
 /* ---------------- Server-side OAuth state ---------------- */
 const pendingStates = new Map();
@@ -57,7 +58,7 @@ const loadRefresh = () => {
 };
 
 /* ---------------- Spotify OAuth ---------------- */
-app.get("/login", (req, res) => {
+app.get("/login", (_req, res) => {
   if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET || !SPOTIFY_REDIRECT_URI) {
     return res.status(500).send("Missing Spotify ENV vars");
   }
@@ -116,6 +117,8 @@ app.get("/callback", async (req, res) => {
       <h2>Klart!</h2>
       <p>Kopiera refresh tokenen och lägg den som <code>REFRESH_TOKEN</code> i Render (eller använd /admin/set-refresh).</p>
       <pre style="background:#111;color:#0f0;padding:12px;border-radius:8px">${rt}</pre>
+      <p>Scopes beviljade:</p>
+      <pre>${(data.scope||"").split(" ").join("\n")}</pre>
       <p>Testa sedan <a href="/whoami">/whoami</a></p>
     `);
   } catch (e) {
@@ -181,27 +184,45 @@ app.get("/now-playing", async (_req, res) => {
   }
 });
 
-/* ---------------- Recent Played (färsk direkt) ---------------- */
+/* ---------------- Recent Played: färskt varje gång ---------------- */
+// Hjälpfunktion: hämta raw recent från Spotify
+async function fetchRecentRaw(limit = 50) {
+  const at = await getAccessToken();
+  if (!at) return { ok:false, status:401, headers:{}, body:null };
+
+  const url = new URL("https://api.spotify.com/v1/me/player/recently-played");
+  url.searchParams.set("limit", String(Math.min(Math.max(limit, 1), 50)));
+
+  const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${at}` } });
+  const ct = r.headers.get("content-type") || "";
+  const headers = {
+    date: r.headers.get("date"),
+    content_type: ct,
+    cache_control: r.headers.get("cache-control"),
+    retry_after: r.headers.get("retry-after"),
+    spotify_trace_id: r.headers.get("spotify-trace-id")
+  };
+
+  const text = await r.text();
+  let body = null;
+  try { body = JSON.parse(text); } catch { body = text; }
+
+  return { ok: r.ok, status: r.status, headers, body };
+}
+
+// /recent – topp 3 (unik per låt som default). ?dupes=1 för att TILLÅTA dubbletter (renaste “3 senaste spelningar”)
 app.get("/recent", async (req, res) => {
   noStore(res);
   try {
-    const at = await getAccessToken();
-    if (!at) return res.json({ items: [] });
+    const allowDupes = String(req.query.dupes||"").toLowerCase() === "1" || String(req.query.distinct||"") === "0";
+    const excludeId = (req.query.exclude_id || "").trim();
 
-    const url = new URL("https://api.spotify.com/v1/me/player/recently-played");
-    url.searchParams.set("limit", "20");
-
-    const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${at}` } });
-    const text = await r.text();
-
-    let json = null;
-    try { json = JSON.parse(text); } catch {
-      return res.status(r.status || 500).json({ items: [], error: "non_json", raw: text.slice(0,200) });
+    const out = await fetchRecentRaw(50);
+    if (!out.ok || !out.body || !Array.isArray(out.body.items)) {
+      return res.status(out.status || 500).json({ items: [], error: out.body || "recent_fetch_failed", meta: out.headers });
     }
-    if (!r.ok) return res.status(r.status).json({ items: [], error: json });
 
-    const rawItems = Array.isArray(json.items) ? json.items : [];
-    const mapped = rawItems
+    const mapped = out.body.items
       .filter(it => it?.track?.id && it?.played_at)
       .map(it => ({
         id: it.track.id,
@@ -211,22 +232,73 @@ app.get("/recent", async (req, res) => {
         url: it.track.external_urls?.spotify || "",
         played_at: it.played_at
       }))
-      .sort((a, b) => new Date(b.played_at) - new Date(a.played_at));
+      .sort((a, b) => toMs(b.played_at) - toMs(a.played_at));
 
-    const excludeId = (req.query.exclude_id || "").trim();
-    const uniq = [];
+    const result = [];
     const seen = new Set();
     for (const it of mapped) {
       if (excludeId && it.id === excludeId) continue;
-      if (seen.has(it.id)) continue;
-      seen.add(it.id);
-      uniq.push(it);
-      if (uniq.length >= 3) break;
+      if (!allowDupes) {
+        if (seen.has(it.id)) continue;
+        seen.add(it.id);
+      }
+      result.push(it);
+      if (result.length >= 3) break;
     }
-
-    return res.json({ items: uniq });
+    return res.json({ items: result });
   } catch (e) {
     return res.json({ items: [], error: String(e) });
+  }
+});
+
+// /recent/raw – råsvar från Spotify (för felsökning)
+app.get("/recent/raw", async (_req, res) => {
+  noStore(res);
+  const out = await fetchRecentRaw(20);
+  // Skicka tillbaka som ärligt JSON-objekt med metadata
+  return res.status(out.status || 500).json(out);
+});
+
+// /recent/diagnose – kort sammanfattning med tider
+app.get("/recent/diagnose", async (_req, res) => {
+  noStore(res);
+  try {
+    const who = await (async () => {
+      const at = await getAccessToken();
+      if (!at) return null;
+      const r = await fetch("https://api.spotify.com/v1/me", { headers: { Authorization: `Bearer ${at}` } });
+      if (!r.ok) return null;
+      return r.json();
+    })();
+
+    const now = lastNow;
+    const out = await fetchRecentRaw(10);
+    const items = Array.isArray(out.body?.items) ? out.body.items : [];
+
+    const mapped = items
+      .filter(it => it?.track?.id && it?.played_at)
+      .map(it => ({
+        id: it.track.id,
+        title: it.track.name,
+        artists: (it.track.artists||[]).map(a=>a.name),
+        played_at: it.played_at,
+        ago_s: Math.round((Date.now() - toMs(it.played_at)) / 1000)
+      }))
+      .sort((a,b)=> toMs(b.played_at)-toMs(a.played_at));
+
+    const nowInRecent = now?.playing ? mapped.some(x => x.id === now.id) : false;
+
+    res.json({
+      ok: true,
+      whoami: who ? { id: who.id, name: who.display_name, product: who.product } : null,
+      now,
+      now_in_recent: nowInRecent,
+      recent_count: mapped.length,
+      recent_top: mapped.slice(0,10),
+      raw_meta: { status: out.status, headers: out.headers }
+    });
+  } catch (e) {
+    res.status(500).json({ ok:false, error:String(e) });
   }
 });
 
@@ -320,6 +392,12 @@ app.get("/whoami", async (_req, res) => {
   } catch (e) {
     return res.status(500).json({ ok:false, error:String(e) });
   }
+});
+
+app.get("/env-check", (_req, res) => {
+  const fromEnv = !!process.env.REFRESH_TOKEN;
+  const len = process.env.REFRESH_TOKEN ? process.env.REFRESH_TOKEN.length : 0;
+  res.json({ has_env_refresh: fromEnv, env_refresh_len: len, has_override: !!OVERRIDE_REFRESH });
 });
 
 app.post("/admin/set-refresh", express.text({ type: "*/*" }), (req, res) => {
