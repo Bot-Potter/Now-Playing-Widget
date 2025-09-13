@@ -6,7 +6,7 @@
 <title>Nu spelas</title>
 <style>
   :root{
-    --accent:#f0f0f0; /* Standard offwhite (används bara när inget spelas & ingen snapshot) */
+    --accent:#f0f0f0; /* Standard offwhite (används bara initialt; vi behåller färg vid paus/inget spelas) */
     --text:#f6e9f5; --muted:#e9d3f2;
     --bar-bg:rgba(255,255,255,.16);
     --radius:18px;
@@ -19,7 +19,6 @@
   }
   .wrap{width:min(760px,94vw)}
 
-  /* KORTET */
   .card{
     position:relative;width:100%;
     padding:18px 22px 20px;border-radius:var(--radius);
@@ -48,7 +47,6 @@
 
   .empty{text-align:center;padding:28px 22px;color:#e0cade;opacity:.85}
 
-  /* SENASTE 3 */
   .recent{
     margin-top:14px;
     display:grid;
@@ -76,7 +74,6 @@
 </head>
 <body>
   <div class="wrap">
-    <!-- Hela kortet är klickbart -->
     <a id="cardLink" class="card" aria-live="polite" target="_blank" rel="noopener">
       <div id="bg" class="bg"
            style="background-image:url('https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314')"></div>
@@ -95,7 +92,6 @@
       <div id="empty" class="empty">Ingen låt spelas just nu.</div>
     </a>
 
-    <!-- Senaste 3 -->
     <div id="recent" class="recent" aria-label="Senaste låtar"></div>
   </div>
 
@@ -141,30 +137,35 @@
     });
   }
 
-  /* Minnet för bild+accent så vi kan behålla dem i paus */
   let currentTrackId = null;
   let lastImage = PLACEHOLDER_IMG;
   let lastAccent = DEFAULT_ACCENT;
 
   function applyArtwork(imgUrl){
-    lastImage = imgUrl || PLACEHOLDER_IMG;
+    lastImage = imgUrl || lastImage;              // ⟵ behåll senaste, ingen placeholder-injektion
     el.cover.src = lastImage;
     el.bg.style.backgroundImage = `url("${lastImage}")`;
     if (imgUrl) {
       dominantColorFromURL(imgUrl).then(c => { lastAccent=c; setAccent(c); });
     } else {
-      lastAccent = DEFAULT_ACCENT; setAccent(DEFAULT_ACCENT);
+      // ingen ny bild → behåll befintlig accentfärg
+      setAccent(lastAccent);
     }
   }
 
   function showEmpty(){
-    el.content.hidden=true; el.empty.hidden=false;
-    currentTrackId = null;
-    setAccent(DEFAULT_ACCENT);
-    el.bg.style.backgroundImage=`url("${PLACEHOLDER_IMG}")`;
-    el.cover.src=PLACEHOLDER_IMG;
+    // Visa tomtext men rör inte bild eller accent alls
+    el.content.hidden=true;
+    el.empty.hidden=false;
+
     el.cardLink.href="#";
-    el.tStart.textContent="0:00"; el.tEnd.textContent="0:00"; el.bar.style.width="0%";
+    el.tStart.textContent="0:00";
+    el.tEnd.textContent="0:00";
+    el.bar.style.width="0%";
+
+    // Lämna bg/cover/accent oförändrat (ingen placeholder)
+    // currentTrackId kan nollas om du vill att /recent inte ska exkludera den senast spelade:
+    // currentTrackId = null;
   }
 
   function showCardBase(d){
@@ -186,33 +187,28 @@
     try{
       const now = await fetchJSON(API_NOW);
       if (now && now.playing) {
-        // Ny låt? uppdatera bild + accent en gång
-        if (now.id !== currentTrackId && now.image){
-          applyArtwork(now.image);
+        if (now.id !== currentTrackId) {
+          applyArtwork(now.image || null);
           currentTrackId = now.id || null;
         }
         showCardBase(now);
         return;
       }
-      // Inte playing – kolla snapshot (paus)
       const snap = await fetchJSON(API_SNAPSHOT);
       if (snap && snap.playing && snap.id) {
-        // Visa pausad låt: behåll tidigare artwork/accent (eller sätt från snap)
         if (snap.id !== currentTrackId) {
-          if (snap.image) applyArtwork(snap.image); else applyArtwork(null);
+          applyArtwork(snap.image || null);
           currentTrackId = snap.id;
         }
-        showCardBase(snap); // progress från server → fryser
+        showCardBase(snap);
         return;
       }
-      // Varken now eller snapshot
       showEmpty();
     }catch{
-      // Vid nätverksfel – gör inget drastiskt; behåll senaste vy
+      // behåll senaste vy vid nätverksfel
     }
   }
 
-  /* ------- Recent (enkel varje sekund) ------- */
   function renderRecent(list){
     el.recent.innerHTML="";
     const three = (Array.isArray(list)?list:[]).slice(0,3);
@@ -242,7 +238,6 @@
     }catch{}
   }
 
-  /* Stabil 1 Hz poller utan drift */
   function startPoller(fn, periodMs=1000){
     let next = performance.now();
     async function step(){
@@ -254,7 +249,6 @@
     setTimeout(step, 0);
   }
 
-  // Start
   startPoller(pollNow, 1000);
   startPoller(pollRecent, 1000);
 </script>
