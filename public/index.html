@@ -226,6 +226,15 @@
 
   startPoller(pollNow, 500);
   startPoller(pollRecent, 500);
+
+  /* === Transparent bakgrund via ?bg=transparent === */
+  (() => {
+    const qs = new URLSearchParams(location.search);
+    if ((qs.get("bg") || "").toLowerCase() === "transparent") {
+      document.documentElement.style.background = "transparent";
+      document.body.style.background = "transparent";
+    }
+  })();
 </script>
 </body>
 </html>
