@@ -6,7 +6,7 @@
 <title>Nu spelas</title>
 <style>
   :root{
-    --accent:#f0f0f0; /* Standard offwhite */
+    --accent:#f0f0f0; /* Standard offwhite (används bara när inget spelas) */
     --text:#f6e9f5; --muted:#e9d3f2;
     --bar-bg:rgba(255,255,255,.16);
     --radius:18px;
@@ -19,11 +19,13 @@
   }
   .wrap{width:min(760px,94vw)}
 
+  /* KORTET */
   .card{
     position:relative;width:100%;
     padding:18px 22px 20px;border-radius:var(--radius);
     overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);isolation:isolate;
-    cursor:pointer;text-decoration:none;color:inherit;display:block;
+    cursor:pointer;
+    text-decoration:none;color:inherit;display:block;
   }
   .bg{position:absolute;inset:0;background-size:cover;background-position:center;
       filter:blur(26px) saturate(130%) brightness(70%);transform:scale(1.12);z-index:-2}
@@ -47,6 +49,7 @@
 
   .empty{text-align:center;padding:28px 22px;color:#e0cade;opacity:.85}
 
+  /* SENASTE 3 */
   .recent{
     margin-top:14px;
     display:grid;
@@ -74,11 +77,14 @@
 </head>
 <body>
   <div class="wrap">
+    <!-- Hela kortet är klickbart -->
     <a id="cardLink" class="card" aria-live="polite" target="_blank" rel="noopener">
-      <div id="bg" class="bg" style="background-image:url('https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314')"></div>
+      <div id="bg" class="bg"
+           style="background-image:url('https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314')"></div>
 
       <div id="content" class="row" hidden>
-        <div class="cover"><img id="cover" alt="Omslag" src="https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314"></div>
+        <div class="cover"><img id="cover" alt="Omslag"
+          src="https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314"></div>
         <div class="meta">
           <h1 id="title" class="title">–</h1>
           <div id="artist" class="artist">–</div>
@@ -90,6 +96,7 @@
       <div id="empty" class="empty">Ingen låt spelas just nu.</div>
     </a>
 
+    <!-- Senaste 3 -->
     <div id="recent" class="recent" aria-label="Senaste låtar"></div>
   </div>
 
@@ -108,6 +115,7 @@
   };
 
   const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
+  const setAccent=(c)=>document.documentElement.style.setProperty("--accent",c);
 
   async function dominantColorFromURL(url){
     return new Promise((resolve)=>{
@@ -131,21 +139,37 @@
       img.src=url;
     });
   }
-  const setAccent=(c)=>document.documentElement.style.setProperty("--accent",c);
 
+  /* Tillstånd som minns senaste låtens visuella data – används vid paus */
   let nowId = null;
+  let lastImage = PLACEHOLDER_IMG;
+  let lastAccent = DEFAULT_ACCENT;
+
+  function applyArtworkAndAccent(imgUrl){
+    el.cover.src = imgUrl || PLACEHOLDER_IMG;
+    el.bg.style.backgroundImage = `url("${imgUrl || PLACEHOLDER_IMG}")`;
+    if (imgUrl) dominantColorFromURL(imgUrl).then(c => {
+      lastAccent = c; setAccent(c);
+    });
+  }
 
   function paintNow(d){
-    if(!d||!d.playing){
+    // Heuristik: "paus" om playing=false men vi har giltiga tidsvärden/track-id
+    const isPaused = !!(d && d.playing === false && d.id && (d.progress_ms ?? null) !== null);
+
+    if(!d || (!d.playing && !isPaused)){
+      // INGET SPELAS: visa tomvy + återställ placeholder & offwhite
       el.content.hidden=true; el.empty.hidden=false;
+      setAccent(DEFAULT_ACCENT);
       el.bg.style.backgroundImage=`url("${PLACEHOLDER_IMG}")`;
       el.cover.src=PLACEHOLDER_IMG;
-      setAccent(DEFAULT_ACCENT);
       el.cardLink.href="#";
       el.tStart.textContent="0:00"; el.tEnd.textContent="0:00"; el.bar.style.width="0%";
+      nowId = null;
       return;
     }
 
+    // SPELAR ELLER PAUSAD: visa kortet
     el.content.hidden=false; el.empty.hidden=true;
 
     el.title.textContent=d.title||"Okänd låt";
@@ -153,16 +177,27 @@
     const p=d.progress_ms||0,t=d.duration_ms||1;
     el.tStart.textContent=ms(p); el.tEnd.textContent=ms(t);
     el.bar.style.width=(100*p/Math.max(1,t))+"%";
-
-    if (d.id !== nowId && d.image){
-      el.cover.src=d.image;
-      el.bg.style.backgroundImage=`url("${d.image}")`;
-      dominantColorFromURL(d.image).then(setAccent);
-    }
     el.cardLink.href = d.url || "#";
-    nowId = d.id || null;
+
+    if (d.id !== nowId) {
+      // Ny låt → byt bild + accent
+      if (d.image){
+        lastImage = d.image;
+        applyArtworkAndAccent(d.image);
+      } else {
+        lastImage = PLACEHOLDER_IMG;
+        setAccent(DEFAULT_ACCENT);
+        el.cover.src=PLACEHOLDER_IMG;
+        el.bg.style.backgroundImage=`url("${PLACEHOLDER_IMG}")`;
+      }
+      nowId = d.id || null;
+    } else {
+      // Samma låt: om paus → behåll senast kända bild/accent (gör inget)
+      // Om spelar → inget att ändra här (progress/texter redan satta)
+    }
   }
 
+  /* ------- Recent: enkel & robust render varje sekund ------- */
   function renderRecent(list){
     el.recent.innerHTML="";
     const three = (Array.isArray(list)?list:[]).slice(0,3);
@@ -186,7 +221,7 @@
 
   async function pollNow(){
     try{
-      const r=await fetch(API_NOW,{cache:"no-store"});
+      const r=await fetch("/now-playing",{cache:"no-store"});
       const d=await r.json();
       paintNow(d);
     }catch{}
@@ -195,12 +230,13 @@
   async function pollRecent(){
     try{
       const exclude = nowId ? `?exclude_id=${encodeURIComponent(nowId)}` : "";
-      const r=await fetch(API_REC+exclude,{cache:"no-store"});
+      const r=await fetch("/recent"+exclude,{cache:"no-store"});
       const data=await r.json();
       renderRecent(data.items||[]);
     }catch{}
   }
 
+  // Start
   pollNow(); pollRecent();
   setInterval(pollNow,1000);
   setInterval(pollRecent,1000);
