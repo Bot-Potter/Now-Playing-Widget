@@ -101,30 +101,30 @@
   }
   const setAccent=(c)=>document.documentElement.style.setProperty("--accent",c);
 
-  /* ------- NOW + smooth progress (utan bakåthopp) ------- */
-  // Vi låter aldrig den visade tiden passera serverns progress.
-  const SAFETY_LAG_MS = 200; // liten buffert som gör att vi håller oss bakom servern
+  /* ------- NOW (rak progress utan smoothing) ------- */
+  const SAFETY_LAG_MS = 100; // håll oss strax bakom servern
 
   let nowData = { playing:false, paused:false };
-  let baseProgress = 0;  // serverns progress_ms vid senaste poll
+  let baseProgress = 0;  // progress_ms från servern
   let duration = 1;
   let lastPollTs = 0;
   let currentId = null;
   let rafId = 0;
-  let shown = 0;         // visad progress (ms)
 
   function showEmpty(){
     el.content.hidden=true;
-    el.empty.hidden=false;
+    el.empty.hidden=true; // vi sätter visningen strax efter, för att undvika blink
     el.bg.style.backgroundImage="";
     el.cardLink.href="#";
     el.bar.style.width="0%";
     el.tStart.textContent="0:00";
     el.tEnd.textContent="0:00";
+    // Visa tomtext nu (utan att döljas av ev. tidigare layout)
+    requestAnimationFrame(()=>{ el.empty.hidden=false; });
   }
-
   function showCard(d){
-    el.content.hidden=false; el.empty.hidden=true;
+    el.empty.hidden=true;
+    el.content.hidden=true; // pre-hide för att slippa layout-jump
     el.title.textContent=d.title||"Okänd låt";
     el.artist.textContent=(d.artists||[]).join(", ")||d.album||"";
     el.tEnd.textContent=ms(d.duration_ms||0);
@@ -134,37 +134,23 @@
       dominantColorFromURL(d.image).then(setAccent);
     }
     el.cardLink.href = d.url || "#";
+    requestAnimationFrame(()=>{ el.content.hidden=false; });
   }
 
   function paintNowStatic(d){
-    // Krav: vid paus ska tomvy visas
     if (d?.paused) { showEmpty(); return; }
     if (d?.playing) { showCard(d); return; }
     showEmpty();
   }
 
   function tick(){
-    // Paus eller inget spelas => ingen tick, UI styrs av paintNowStatic
-    if (nowData.paused || !nowData.playing) {
-      rafId = requestAnimationFrame(tick);
-      return;
+    // Bara uppdatera progress när det faktiskt spelas
+    if (nowData.playing) {
+      const elapsed = Math.max(0, Date.now() - lastPollTs - SAFETY_LAG_MS);
+      const prog = Math.min(duration, Math.max(0, baseProgress + elapsed));
+      el.tStart.textContent = ms(prog);
+      el.bar.style.width = (100 * prog / duration) + "%";
     }
-
-    // Beräkna en lokal uppskattning men håll den ALLTID <= serverns estimerade progress.
-    // Estimerad serverprogress just nu:
-    const serverEst = Math.min(duration, Math.max(0, baseProgress + Math.max(0, Date.now() - lastPollTs - SAFETY_LAG_MS)));
-
-    // Stega visningen mjukt mot serverEst, men aldrig förbi:
-    if (shown < serverEst) {
-      const step = Math.max(15, (serverEst - shown) * 0.25); // snabb nog men smoothing
-      shown = Math.min(serverEst, shown + step);
-    } else if (shown > serverEst) {
-      // Om servern hoppat bak (seek/paus) – snappa direkt nedåt för att undvika bakåthopp senare
-      shown = serverEst;
-    }
-
-    el.tStart.textContent = ms(shown);
-    el.bar.style.width = (100 * shown / duration) + "%";
     rafId = requestAnimationFrame(tick);
   }
 
@@ -174,40 +160,34 @@
       const d = await r.json();
       nowData = d || { playing:false, paused:false };
 
-      // Paus => visa tomvy
       if (d?.paused) {
-        currentId = d.id || null;
-        duration = Math.max(1, d.duration_ms || 1);
+        // Paus => tomvy direkt
+        duration     = Math.max(1, d.duration_ms || 1);
         baseProgress = Math.min(duration, Math.max(0, d.progress_ms || 0));
-        lastPollTs = Date.now();
-        shown = baseProgress;
+        lastPollTs   = Date.now();
         paintNowStatic(d);
         return;
       }
 
-      // Inget spelas
       if (!d || !d.playing) {
-        currentId = null;
-        baseProgress = 0; duration = 1; lastPollTs = Date.now(); shown = 0;
+        // Inget spelas
+        duration = 1; baseProgress = 0; lastPollTs = Date.now(); currentId = null;
         paintNowStatic(d);
         return;
       }
 
-      // Spelas: uppdatera UI
-      if (d.id !== currentId) {
-        currentId = d.id;
-        showCard(d);
-        shown = Math.min(d.duration_ms || 1, Math.max(0, d.progress_ms || 0)); // starta visning på servervärdet
-      }
-
+      // Spelas
       duration     = Math.max(1, d.duration_ms || 1);
       baseProgress = Math.min(duration, Math.max(0, d.progress_ms || 0));
       lastPollTs   = Date.now();
 
-      // Om vi ligger före serverns progress (kan ske efter resume), klipp ner direkt
-      if (shown > baseProgress) shown = baseProgress;
+      // Visa kortet alltid om det spelar (fix för “tomvy fastnar”)
+      if (d.id !== currentId || el.content.hidden) {
+        currentId = d.id;
+        showCard(d);
+      }
 
-    }catch(e){ /* nätverksglitch ignoreras */ }
+    }catch(e){ /* ignorera nätverksglitchar */ }
   }
 
   /* ---------------- Recent ---------------- */
@@ -257,7 +237,7 @@
 
   /* start */
   pollNow(); pollRecent();
-  setInterval(pollNow, 1000);   // 1 Hz: exakt synk & pausdetektion
+  setInterval(pollNow, 1000);   // 1 Hz för exakt paus/start-detektion
   setInterval(pollRecent, 1000);
   cancelAnimationFrame(rafId);
   rafId = requestAnimationFrame(tick);
