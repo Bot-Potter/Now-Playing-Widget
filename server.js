@@ -28,10 +28,9 @@ const noStore = (res) => {
   res.set("Pragma", "no-cache");
 };
 
-/* ---------------- Server-side OAuth state ---------------- */
+/* ---------------- OAuth state ---------------- */
 const pendingStates = new Map();           // state -> expiresAt (ms)
 const STATE_TTL_MS = 10 * 60 * 1000;
-
 function newState() { return crypto.randomBytes(16).toString("hex"); }
 function addState(st) { pendingStates.set(st, Date.now() + STATE_TTL_MS); }
 function consumeState(st) {
@@ -45,8 +44,8 @@ setInterval(() => {
   for (const [k, exp] of pendingStates.entries()) if (exp <= now) pendingStates.delete(k);
 }, 60_000);
 
-/* ---------------- Refresh token hantering ---------------- */
-let OVERRIDE_REFRESH = null; // kan sättas via /admin/set-refresh
+/* ---------------- Refresh token ---------------- */
+let OVERRIDE_REFRESH = null;
 const loadRefresh = () => {
   if (OVERRIDE_REFRESH) return OVERRIDE_REFRESH;
   if (process.env.REFRESH_TOKEN) return process.env.REFRESH_TOKEN;
@@ -119,7 +118,7 @@ app.get("/callback", async (req, res) => {
   }
 });
 
-/* ---------------- Spotify Access Token via refresh ---------------- */
+/* ---------------- Access token via refresh ---------------- */
 async function getAccessToken() {
   const refresh_token = loadRefresh();
   if (!refresh_token) return null;
@@ -138,21 +137,17 @@ async function getAccessToken() {
 }
 
 /* ==========================================================
-   STATE: now + snapshot + local recent + 500ms "tick"
+   STATE: now + snapshot + local recent + 500ms tick
    ========================================================== */
-let lastNow = { playing: false };          // senaste "nu spelas" vi visar utåt
-let rawIsPlaying = false;                  // vad Spotify sa senaste fetch
-let lastFetchTs = 0;
+let lastNow = { playing: false };
+let rawIsPlaying = false;           // senast rapporterade spelstatus från Spotify
+let lastTrackSnapshot = null;       // senast aktiva track
+let lastTrackSeenAt = 0;
+const SNAPSHOT_TTL_MS = 2 * 60 * 1000;
 
-let lastTrackSnapshot = null;              // senaste aktiva track (för pausvy)
-let lastTrackSeenAt = 0;                   // när vi senast uppdaterade snapshot
-const SNAPSHOT_TTL_MS = 2 * 60 * 1000;     // snapshot giltighet
-
-// Lokal recent-historik: fylls endast när låt byts (via now playing)
-let localRecent = [];                      // newest-first, objekt: {id,title,artists,image,url,played_at}
+let localRecent = [];               // byggs endast av spårbyten via now
 const LOCAL_RECENT_MAX = 50;
 
-/* Utilities */
 function simplifyTrack(json) {
   const item = json?.item || {};
   return {
@@ -179,25 +174,22 @@ function pushLocalRecentFrom(prevTrack) {
     url: prevTrack.url || "",
     played_at: new Date().toISOString()
   };
-  // undvik dubbletter i rad på samma id
-  if (localRecent[0]?.id === entry.id) return;
+  if (localRecent[0]?.id === entry.id) return;      // undvik dubbletter i rad
   localRecent.unshift(entry);
   if (localRecent.length > LOCAL_RECENT_MAX) localRecent.length = LOCAL_RECENT_MAX;
 }
 
-/* --------- Spotify fetch (ca 1 Hz) --------- */
+/* --------- Spotify fetch (nu var 500 ms) --------- */
 async function refreshFromSpotify() {
   try {
     const at = await getAccessToken();
-    if (!at) { rawIsPlaying = false; return; }
+    if (!at) { rawIsPlaying = false; lastNow = { playing:false }; return; }
 
     const r = await fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track", {
       headers: { Authorization: `Bearer ${at}` }
     });
-    lastFetchTs = Date.now();
 
     if (r.status === 204) {
-      // inget spelas
       rawIsPlaying = false;
       lastNow = { playing:false };
       return;
@@ -213,80 +205,63 @@ async function refreshFromSpotify() {
     rawIsPlaying = isPlaying;
 
     if (!isPlaying) {
-      // Spelas inte → lastNow sätts till playing:false,
-      // men vi behåller snapshot separat (för pausvy) i endpoints.
       lastNow = { playing:false };
       return;
     }
 
     const payload = simplifyTrack(json);
 
-    // Trackbyte? Skjut in föregående i localRecent
+    // Trackbyte? lägg förra i recent
     if (lastTrackSnapshot?.id && lastTrackSnapshot.id !== payload.id) {
       pushLocalRecentFrom(lastTrackSnapshot);
     }
 
-    // Uppdatera "lastNow" (serverns sanna nu-låt)
-    lastNow = payload;
-
-    // Uppdatera snapshot till senaste aktiva låt
-    lastTrackSnapshot = { ...payload };
+    lastNow = payload;                     // nu spelas
+    lastTrackSnapshot = { ...payload };    // snapshot (för paus)
     lastTrackSeenAt = Date.now();
 
-  } catch (e) {
-    // nätverksfel → gör inget; tick-loopen sköter progress om playing
+  } catch {
+    // nätverksfel -> gör inget, tick hanterar progress när playing
   }
 }
 
-/* --------- 500ms tick för progress ---------
-   När rawIsPlaying = true (enligt senaste fetch), "tackar" vi upp progress_ms
-   lokalt mellan Spotify-förfrågningar för att klienten ska få 2 Hz uppdateringar.
-------------------------------------------------*/
+/* --------- 500ms tick: öka progress lokalt endast när playing ---------- */
 const TICK_MS = 500;
 setInterval(() => {
   if (!rawIsPlaying) return;
   if (!lastTrackSnapshot?.id) return;
-  // öka progress i snapshot
   if (typeof lastTrackSnapshot.progress_ms === "number" && typeof lastTrackSnapshot.duration_ms === "number") {
-    const next = Math.min(
-      lastTrackSnapshot.duration_ms,
-      (lastTrackSnapshot.progress_ms || 0) + TICK_MS
-    );
+    const next = Math.min(lastTrackSnapshot.duration_ms, (lastTrackSnapshot.progress_ms || 0) + TICK_MS);
     lastTrackSnapshot.progress_ms = next;
-
-    // spegla även i lastNow om det är samma spår
-    if (lastNow?.id === lastTrackSnapshot.id) {
+    if (lastNow?.id === lastTrackSnapshot.id && lastNow.playing) {
       lastNow.progress_ms = next;
     }
   }
 }, TICK_MS);
 
-/* --------- Kör Spotify-fetch ca 1 Hz --------- */
-setInterval(refreshFromSpotify, 1000);
+/* --------- Kör Spotify-fetch var 500 ms för snabb paus-detektering ----- */
+setInterval(refreshFromSpotify, 500);
 
 /* ---------------- Endpoints ---------------- */
 
-// Stabil "nu spelas"
+// Nu spelas
 app.get("/now-playing", (_req, res) => {
   noStore(res);
   if (lastNow?.playing && lastTrackSnapshot?.id === lastNow.id) {
-    // returnera upp-tickad version
     return res.json({ ...lastNow });
   }
-  // inte playing just nu
   return res.json({ playing:false });
 });
 
-// Snapshot för pausvy
+// Snapshot/paus: signalera tydligt paused:true (playing:false)
 app.get("/now-snapshot", (_req, res) => {
   noStore(res);
   const fresh = lastTrackSnapshot && (Date.now() - lastTrackSeenAt) < SNAPSHOT_TTL_MS;
   if (!fresh) return res.json({ playing:false });
-  // snapshot "spelas" = true så klienten kan visa kortet; progress fryser när servern inte tickar
-  return res.json({ ...lastTrackSnapshot, snapshot:true, playing:true });
+  return res.json({ ...lastTrackSnapshot, snapshot:true, playing:false, paused:true });
 });
 
-// Recent från lokalt minne (endast byggt av track-byten)
+// Recent från lokalt minne (byggt vid track-byten)
 app.get("/recent", (req, res) => {
   noStore(res);
   const excludeId = (req.query.exclude_id || "").trim() || null;
@@ -295,7 +270,7 @@ app.get("/recent", (req, res) => {
   const seen = new Set();
   for (const it of localRecent) {
     if (excludeId && it.id === excludeId) continue;
-    if (seen.has(it.id)) continue; // unik per track-id
+    if (seen.has(it.id)) continue;
     seen.add(it.id);
     out.push(it);
     if (out.length >= 3) break;
@@ -322,8 +297,7 @@ app.get("/whoami", async (_req, res) => {
 
     const ct = r.headers.get("content-type") || "";
     const bodyText = await r.text();
-    let bodyJson = null;
-    try { bodyJson = JSON.parse(bodyText); } catch {}
+    let bodyJson = null; try { bodyJson = JSON.parse(bodyText); } catch {}
 
     if (!r.ok) {
       return res.status(r.status).json({
