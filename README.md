@@ -16,141 +16,171 @@ Detta projekt visar i realtid vilken låt som spelas på Spotify. Det innehålle
 
 ## 📂 Projektstruktur  
 
-/public
-index.html ← huvudwidgeten
-overlay.html ← OBS-overlay
-app.js ← frontend-logik
-server.js ← Node.js/Express-server (Spotify API + SSE + Twitch listener)
-refresh_token.json ← sparad refresh token från Spotify
-.env ← miljövariabler
+- /public
+- index.html ← huvudwidgeten
+- overlay.html ← OBS-overlay
+- app.js ← frontend-logik
+- server.js ← Node.js/Express-server (Spotify API + SSE + Twitch listener)
+- refresh_token.json ← sparad refresh token från Spotify
+- .env ← miljövariabler
 
-yaml
-Kopiera kod
-
+  
 ---
 
 ## ⚙️ Installation  
 
 ### 1. Klona repot  
-```bash
+
 git clone https://github.com/dittnamn/spotify-now-playing-widget.git
 cd spotify-now-playing-widget
-2. Installera dependencies
-bash
-Kopiera kod
+
+### 2. Installera dependencies
+
 npm install
-3. Skapa .env
-ini
-Kopiera kod
-# Spotify
-SPOTIFY_CLIENT_ID=din_spotify_client_id
-SPOTIFY_CLIENT_SECRET=din_spotify_client_secret
-SPOTIFY_REDIRECT_URI=https://din-deploy-url/callback
-REFRESH_TOKEN=din_refresh_token
 
-# Twitch (valfritt, krävs bara om du vill trigga overlay via !song)
-TWITCH_USERNAME=din_twitchbot
-TWITCH_OAUTH_TOKEN=oauth:din_twitchtoken
-TWITCH_CHANNEL=din_twitchkanal
+### 3. Skapa .env
 
-# Admin
+## Spotify
+- SPOTIFY_CLIENT_ID=din_spotify_client_id
+- SPOTIFY_CLIENT_SECRET=din_spotify_client_secret
+- SPOTIFY_REDIRECT_URI=https://din-deploy-url/callback
+- REFRESH_TOKEN=din_refresh_token
+
+## Twitch (valfritt, krävs bara om du vill trigga overlay via !song)
+- TWITCH_USERNAME=din_twitchbot
+- TWITCH_OAUTH_TOKEN=oauth:din_twitchtoken
+- TWITCH_CHANNEL=din_twitchkanal
+
+## Admin
 ADMIN_SECRET=valfrihemligsträng
 
-# Server
+## Server
 PORT=3000
-🎧 Spotify-setup
-Gå till Spotify Developer Dashboard.
 
-Skapa en ny app → kopiera Client ID och Client Secret.
+# 🎧 Spotify-setup
 
-Lägg till Redirect URI: https://din-deploy-url/callback.
+- Gå till Spotify Developer Dashboard.
+
+- Skapa en ny app → kopiera Client ID och Client Secret.
+
+- Lägg till Redirect URI: https://din-deploy-url/callback.
+
+# Starta servern:
+
+npm start
+
+
+###Gå till http://localhost:3000/login, logga in → kopiera refresh token → lägg i .env.
+
+# 🖥️ Användning
 
 Starta servern:
 
-bash
-Kopiera kod
 npm start
-Gå till http://localhost:3000/login, logga in → kopiera refresh token → lägg i .env.
 
-🖥️ Användning
-Starta servern:
 
-bash
-Kopiera kod
-npm start
 Servern körs på http://localhost:3000.
 
-Endpoints
-/ → huvudwidgeten
+# Endpoints
 
-/overlay.html → OBS-overlay
+- / → huvudwidgeten
 
-/now-playing → nuvarande låt
+- /overlay.html → OBS-overlay
 
-/now-snapshot → snapshot för paus
+- /now-playing → nuvarande låt
 
-/recent → senaste spelade låtar (lokal buffer)
+- /now-snapshot → snapshot för paus
 
-/whoami → info om Spotify-kontot
+- /recent → senaste spelade låtar (lokal buffer)
 
-/events → SSE-ström för overlay
+- /whoami → info om Spotify-kontot
 
-/healthz → health check
+- /events → SSE-ström för overlay
 
-🎨 Frontend & parametrar
+- /healthz → health check
+
+## 🎨 Frontend & parametrar
+
 Widgeten visar nuvarande låt + senaste 3 spelade. Kortet färgsätts efter albumomslaget med offwhite fallback.
 
-Parametrar:
+## Parametrar:
 
 ?bg=transparent → gör bakgrunden genomskinlig
 
 ?recent=0 → döljer “senaste spelade”-delen
 
-Exempel:
+## Exempel:
 
-bash
-Kopiera kod
 https://din-deploy-url/?bg=transparent&recent=0
-OBS-overlay:
+
+
+## OBS-overlay:
 Lägg till en Browser Source i OBS:
 
-URL: https://din-deploy-url/overlay.html
+## URL: https://din-deploy-url/overlay.html
 
 Bredd/Höjd: anpassa efter layout
 
 När någon skriver !song i chatten visas kortet i 10 sekunder.
 
-🔧 Admin & Debug
+# 🔧 Admin & Debug
+
 Sätt refresh token manuellt:
 
-bash
-Kopiera kod
-curl -X POST https://din-deploy-url/admin/set-refresh \
-  -H "x-admin-secret: DIN_ADMIN_SECRET" \
-  --data "din_refresh_token"
-Kolla Spotify-användare:
+- curl -X POST https://din-deploy-url/admin/set-refresh \
+-  -H "x-admin-secret: DIN_ADMIN_SECRET" \
+-  --data "din_refresh_token"
 
-bash
-Kopiera kod
+
+### Kolla Spotify-användare:
+
 GET /whoami
-Kolla miljövariabler:
 
-sql
-Kopiera kod
+
+### Kolla miljövariabler:
+
 GET /env-check
-📸 Screenshots
+
+### 📸 Screenshots
+
 (Lägg gärna in screenshots på widgeten och overlay här.)
 
-📝 TODO
- Cacha accent-färger för bättre prestanda
+# 📝 TODO
 
- Fler chatkommandon som !lastsong
+ - Cacha accent-färger för bättre prestanda
 
- Tema-val (ljus/mörk)
+ - Fler chatkommandon som !lastsong
 
- Visa längre historik än 3 låtar
+ - Tema-val (ljus/mörk)
 
-📜 Licens
-MIT – använd fritt men länka gärna tillbaka till projektet.
+ - Visa längre historik än 3 låtar
 
-👨‍💻 Byggt med ❤️ för Twitch & Spotify-communityn.
+## 📜 Licens
+
+### MIT – använd fritt men länka gärna tillbaka till projektet.
+
+## URL-variabler (Query Parameters)
+
+Song-overlayn kan anpassas med följande `?`-variabler i URL:en:
+
+| Parameter | Default | Exempel | Beskrivning |
+|-----------|---------|---------|-------------|
+| `pos`     | `center` | `?pos=left` | Horisontell position: `left`, `center`, `right`. |
+| `y`       | `55`    | `?y=30` | Avstånd från nederkant i px. |
+| `scale`   | `1.0`   | `?scale=0.9` | Skalar hela overlayn proportionellt. |
+| `w`       | `780`   | `?w=900`, `?w=80vw` | Maxbredd på overlayn. Kan vara i `px`, `%`, `vw` etc. |
+| `h`       | `86`    | `?h=100` | Höjd på omslagsbild (px). Påverkar även textstorlekar. |
+| `blur`    | `1`     | `?blur=0` | Om bakgrunden ska vara blurrad (`1` = på, `0` = av). |
+| `dur`     | `10`    | `?dur=15` | Hur länge overlayn visas (sekunder). |
+| `tick`    | `250`   | `?tick=1000` | Hur ofta progress/tider uppdateras lokalt (ms). |
+| `sync`    | `1000`  | `?sync=2000` | Hur ofta overlayn resynkar mot servern (ms). |
+
+---
+
+### 🔗 Exempel
+
+```text
+https://din-sida.se/overlay.html?pos=right&y=40&scale=0.9&w=900&h=100&blur=1&dur=15&tick=500&sync=2000
+```
+
+### 👨‍💻 Byggt med ❤️ för Twitch & Spotify-communityn.
