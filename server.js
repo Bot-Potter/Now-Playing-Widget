@@ -185,7 +185,6 @@ app.get("/now-playing", async (_req, res) => {
 });
 
 /* ---------------- Recent Played: färskt varje gång ---------------- */
-// Hjälpfunktion: hämta raw recent från Spotify
 async function fetchRecentRaw(limit = 50) {
   const at = await getAccessToken();
   if (!at) return { ok:false, status:401, headers:{}, body:null };
@@ -210,7 +209,7 @@ async function fetchRecentRaw(limit = 50) {
   return { ok: r.ok, status: r.status, headers, body };
 }
 
-// /recent – topp 3 (unik per låt som default). ?dupes=1 för att TILLÅTA dubbletter (renaste “3 senaste spelningar”)
+// /recent – topp 3; default = unika låtar. ?dupes=1 för exakta 3 senaste spelningarna
 app.get("/recent", async (req, res) => {
   noStore(res);
   try {
@@ -251,15 +250,13 @@ app.get("/recent", async (req, res) => {
   }
 });
 
-// /recent/raw – råsvar från Spotify (för felsökning)
+// Raw & diagnose
 app.get("/recent/raw", async (_req, res) => {
   noStore(res);
   const out = await fetchRecentRaw(20);
-  // Skicka tillbaka som ärligt JSON-objekt med metadata
   return res.status(out.status || 500).json(out);
 });
 
-// /recent/diagnose – kort sammanfattning med tider
 app.get("/recent/diagnose", async (_req, res) => {
   noStore(res);
   try {
@@ -302,7 +299,97 @@ app.get("/recent/diagnose", async (_req, res) => {
   }
 });
 
-/* ---------------- SSE för overlay ---------------- */
+/* ========== RECENT DIAGNOS — PROBE & STREAM ========== */
+app.get("/recent/probe", async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const seconds = Math.max(5, Math.min(300, Number(req.query.seconds) || 60));
+  const interval = Math.max(1, Math.min(10, Number(req.query.interval) || 5));
+
+  const samples = [];
+  const start = Date.now();
+  const until = start + seconds * 1000;
+
+  while (Date.now() < until) {
+    const out = await fetchRecentRaw(10);
+    let top = null;
+    if (out.ok && Array.isArray(out.body?.items)) {
+      const mapped = out.body.items
+        .filter(it => it?.track?.id && it?.played_at)
+        .map(it => ({
+          id: it.track.id,
+          title: it.track.name || "",
+          artists: (it.track.artists||[]).map(a=>a.name),
+          played_at: it.played_at
+        }))
+        .sort((a,b)=> new Date(b.played_at) - new Date(a.played_at));
+      top = mapped[0] || null;
+    }
+    samples.push({
+      t: new Date().toISOString(),
+      ok: out.ok,
+      status: out.status,
+      top
+    });
+    if (Date.now() + interval*1000 < until) {
+      await new Promise(r => setTimeout(r, interval*1000));
+    }
+  }
+
+  return res.json({
+    ok: true,
+    seconds,
+    interval,
+    count: samples.length,
+    samples
+  });
+});
+
+const recentSSEClients = new Set();
+let lastTopKey = null;
+let recentStreamerStarted = false;
+
+app.get("/recent/stream", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+  res.write(`: connected\n\n`);
+
+  recentSSEClients.add(res);
+  req.on("close", () => { recentSSEClients.delete(res); });
+
+  if (!recentStreamerStarted) {
+    recentStreamerStarted = true;
+    (async function loop() {
+      for (;;) {
+        try {
+          const out = await fetchRecentRaw(10);
+          if (out.ok && Array.isArray(out.body?.items) && out.body.items.length) {
+            const top = out.body.items
+              .filter(it => it?.track?.id && it?.played_at)
+              .map(it => ({
+                id: it.track.id,
+                title: it.track.name || "",
+                artists: (it.track.artists||[]).map(a=>a.name),
+                played_at: it.played_at
+              }))
+              .sort((a,b)=> new Date(b.played_at) - new Date(a.played_at))[0];
+
+            const key = top ? `${top.id}@${top.played_at}` : null;
+            if (key && key !== lastTopKey) {
+              lastTopKey = key;
+              const data = `event: change\ndata: ${JSON.stringify({ top, at: Date.now() })}\n\n`;
+              for (const c of recentSSEClients) if (!c.writableEnded) c.write(data);
+            }
+          }
+        } catch {}
+        await new Promise(r => setTimeout(r, 5000));
+      }
+    })();
+  }
+});
+
+/* ---------------- SSE för overlay (Twitch !song) ---------------- */
 const sseClients = new Set();
 app.get("/events", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
