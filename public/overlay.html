@@ -9,8 +9,11 @@
     --scale: 1;
     --pos-x: 50%;              /* 0% vänster, 50% mitt, 100% höger (kan styras via ?pos=) */
     --offset-bottom: 24px;     /* ?y= */
-    --max-width: 780px;
+    --max-width: 780px;        /* ?w= */
     --radius: 18px;
+
+    /* Höjd/skalning via omslagsstorlek (styr med ?h=) */
+    --cover: 86px;             /* ?h=  ex. 96 eller 96px */
 
     --accent:#c84cff;          /* ersätts från albumet */
     --text:#fff; --muted:#e7d9ef;
@@ -46,18 +49,22 @@
   .no-blur .bg{ display:none; }
 
   .row{ display:grid; grid-template-columns:auto 1fr auto; gap:14px; align-items:center }
-  .cover{ width:86px; height:86px; border-radius:14px; padding:4px;
+  .cover{ width:var(--cover); height:var(--cover); border-radius:14px; padding:4px;
           background:rgba(255,255,255,.10); box-shadow:0 6px 18px rgba(0,0,0,.45); }
   .cover img{ width:100%; height:100%; border-radius:10px; object-fit:cover; display:block; }
 
   .meta{ min-width:0 }
-  .title{ margin:0; font-weight:900; font-size:22px; line-height:1.15;
+  /* Skala typografi lätt med cover-storleken */
+  .title{ margin:0; font-weight:900; line-height:1.15;
+          font-size:calc(14px + (var(--cover) * 0.10)); /* ~22px vid 86px */
           text-shadow:0 2px 8px rgba(0,0,0,.6); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .artist{ margin:.25rem 0 0; color:var(--muted); font-weight:600; opacity:.96;
-           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+           font-size:calc(10px + (var(--cover) * 0.05)); }
 
   .times{ margin:.65rem 0 .35rem; display:flex; justify-content:space-between;
-          font-variant-numeric:tabular-nums; font-weight:700; color:#f0e7f5e0; font-size:13px; }
+          font-variant-numeric:tabular-nums; font-weight:700; color:#f0e7f5e0;
+          font-size:calc(9px + (var(--cover) * 0.03)); }
   .progress{ height:8px; border-radius:999px; position:relative; overflow:hidden;
              background:var(--bar-bg); box-shadow:inset 0 0 0 1px rgba(255,255,255,.08); }
   .bar{ position:absolute; left:0; top:0; bottom:0; width:0;
@@ -70,7 +77,10 @@
        padding:.22rem .55rem; border-radius:999px; background:rgba(255,255,255,.12);
        border:1px solid rgba(255,255,255,.18); }
 
-  @media (max-width:560px){ :root{ --scale:.96 } .cover{width:78px;height:78px} .title{font-size:20px} }
+  @media (max-width:560px){
+    :root{ --scale:.96 }
+    /* Låt cover vara styrt av ?h även mobilt */
+  }
 </style>
 </head>
 <body>
@@ -95,16 +105,35 @@
      ?pos=left|center|right
      ?scale=1.0
      ?y=24                  (px)
+     ?w=780                 (px, %, vw, etc)  -> maxbredd
+     ?h=86                  (px, etc)         -> omslagsstorlek => påverkar höjd/typografi
      ?blur=0|1              (0 = stäng av blurrad bg, 1 = på)
      ?dur=10                (sekunder visningstid, default 10)
-     ?tick=250              (ms lokaltik – hur ofta vi uppdaterar progress/tider; default 250)
-     ?sync=1000             (ms resync mot server – minst 1000ms)
+     ?tick=250              (ms lokaltik)
+     ?sync=1000             (ms resync mot server)
   */
-  const q = new URLSearchParams(location.search); // URLSearchParams för att läsa queryn. :contentReference[oaicite:0]{index=0}
+  const q = new URLSearchParams(location.search);
+
+  // Hjälpare för CSS-längder: tillåt tal (px default) eller redan formaterade längder.
+  const setLengthVar = (name, val, fallbackUnit = "px") => {
+    if (!val) return;
+    val = String(val).trim();
+    const isLen = /^-?\d*\.?\d+(px|%|vw|vh|rem|em)$/i.test(val);
+    const num   = parseFloat(val);
+    if (isLen) {
+      document.documentElement.style.setProperty(name, val);
+    } else if (!Number.isNaN(num)) {
+      document.documentElement.style.setProperty(name, num + fallbackUnit);
+    }
+  };
+
   const pos=(q.get("pos")||"center").toLowerCase();
   document.documentElement.style.setProperty("--pos-x", pos==="left"?"0%":pos==="right"?"100%":"50%");
   if(q.get("scale")) document.documentElement.style.setProperty("--scale", q.get("scale"));
-  if(q.get("y")) document.documentElement.style.setProperty("--offset-bottom", q.get("y")+"px");
+  if(q.get("y"))     setLengthVar("--offset-bottom", q.get("y"));
+  if(q.get("w"))     setLengthVar("--max-width",     q.get("w"));   // ny: bredd
+  if(q.get("h"))     setLengthVar("--cover",         q.get("h"));   // ny: höjd (via omslag)
+
   const useBlur = q.get("blur")==="1";
   const DUR_MS  = Math.max(1000, (parseFloat(q.get("dur"))||10)*1000);
   const TICK_MS = Math.max(100, parseInt(q.get("tick")||"250",10));
@@ -133,7 +162,6 @@
   const setAccent=c=>document.documentElement.style.setProperty("--accent", c);
 
   function paintStatic(d, who){
-    // Paint statiska delar från payload
     el.title.textContent = d.title || "Okänd låt";
     el.artist.textContent = (d.artists||[]).join(", ") || d.album || "";
     if(d.image){
@@ -145,45 +173,37 @@
     el.by.textContent = who ? `av ${who}` : "";
   }
 
-  // === Ticking (rAF + setInterval resync) ===
-  // rAF för jämn animation, setInterval för regelbunden uppdatering. :contentReference[oaicite:1]{index=1}
   let rafId=null, tickId=null, syncId=null, hideTimer=null;
-  let baseProgress=0, duration=1, startedAt=0; // ms
+  let baseProgress=0, duration=1, startedAt=0;
 
   function startTicker(p0, dur){
     baseProgress = p0|0;
     duration     = Math.max(1, dur|0);
     startedAt    = performance.now();
 
-    stopTicker(); // ifall en fanns
+    stopTicker();
     const step = (t)=>{
       const elapsed = t - startedAt;
       const p = Math.min(duration, baseProgress + elapsed);
       el.tStart.textContent = ms(p);
       el.tEnd.textContent   = ms(duration);
       el.bar.style.width    = (100 * p / duration) + "%";
-      rafId = requestAnimationFrame(step); // rAF – körs före nästa repaint. :contentReference[oaicite:2]{index=2}
+      rafId = requestAnimationFrame(step);
     };
     rafId = requestAnimationFrame(step);
 
-    // Extra säkerhets-tick (minst var TICK_MS) – om du vill strikt 1 Hz kan du sätta ?tick=1000
     tickId = setInterval(()=>{
-      // uppdateringen görs redan via rAF; intervallet finns bara för att garantera "minst X ms"
-      // här kan vi tvinga en uppdatering om rAF skulle pausas
       const now = performance.now();
       const p = Math.min(duration, baseProgress + (now - startedAt));
       el.tStart.textContent = ms(p);
       el.bar.style.width    = (100 * p / duration) + "%";
-    }, TICK_MS); // setInterval kör vår funktion upprepat tills clearInterval(). :contentReference[oaicite:3]{index=3}
+    }, TICK_MS);
 
-    // Resync mot servern för att undvika drift
     syncId = setInterval(async ()=>{
       try{
         const r = await fetch(API_NOW,{cache:"no-store"});
         const j = await r.json();
         if (j && j.playing && j.id) {
-          // Om låten bytts under visningen: avsluta visningen direkt (valfritt)
-          // annars justera progress så animationen matchar servern
           baseProgress = j.progress_ms|0;
           duration     = Math.max(1, j.duration_ms|0);
           startedAt    = performance.now();
@@ -206,7 +226,6 @@
     }, ms);
   }
 
-  // === Dataflöde ===
   async function fetchNowWithRetry(max=5, delay=250){
     for(let i=0;i<max;i++){
       try{ const r=await fetch(API_NOW,{cache:"no-store"}); const j=await r.json(); if(j&&j.playing) return j; }catch{}
@@ -226,7 +245,6 @@
   }
 
   // SSE: triggas från servern när någon skriver !song/!låt
-  // EventSource håller en långlivad anslutning och tar emot events från servern. :contentReference[oaicite:4]{index=4}
   const es = new EventSource("/events");
   es.addEventListener("song", (ev)=>{
     let by=null; try{ by=JSON.parse(ev.data).by||null; }catch{}
