@@ -1,4 +1,4 @@
-// server.js (recent byggs av now-playing snapshots)
+// server.js (recent byggs av now-playing snapshots + pausflagga till client)
 import express from "express";
 import fetch from "node-fetch";
 import dotenv from "dotenv";
@@ -27,7 +27,7 @@ const {
 /* --------------------------------- Helpers -------------------------------- */
 const DATA_DIR = process.cwd();
 const TOKEN_FILE = path.join(DATA_DIR, "refresh_token.json");
-const PLAYS_FILE = path.join(DATA_DIR, "plays.log.jsonl");  // JSON Lines för enkel persistens
+const PLAYS_FILE = path.join(DATA_DIR, "plays.log.jsonl");  // JSON Lines
 const noStore = (res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   res.set("Pragma", "no-cache");
@@ -38,7 +38,7 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
 /* ----------------------- OAuth state (cookie-less) ------------------------ */
 const STATE_TTL_MS = 10 * 60 * 1000;
-const pendingStates = new Map();          // state -> expiresAt
+const pendingStates = new Map();
 const newState = () => crypto.randomBytes(16).toString("hex");
 const addState = (s) => pendingStates.set(s, Date.now() + STATE_TTL_MS);
 const consumeState = (s) => {
@@ -68,7 +68,6 @@ app.get("/login", (_req, res) => {
   const scopes = [
     "user-read-currently-playing",
     "user-read-playback-state",
-    // OBS: vi använder inte längre /recently-played, men scope gör inget.
     "user-read-recently-played"
   ].join(" ");
 
@@ -147,28 +146,16 @@ async function getAccessToken() {
 }
 
 /* ============================ Playback-snapshot =========================== */
-/**
- * Vi kör en bakgrunds-LOOP som hämtar /currently-playing ca 1 Hz.
- * - Upptäcker låtbyten och pushar föregående låt till en "plays"-logg.
- * - Beräknar starttid = now - progress_ms.
- * - Filtrerar bort superkorta lyssningar (< MIN_LISTEN_MS).
- * - Persistens: JSON Lines + ringbuffer i minnet.
- * - /recent bygger helt på denna logg (inte på Spotify /recently-played).
- *
- * Viktigt: respektera 429 Retry-After vid rate limit. (Officiella docs)
- * https://developer.spotify.com/documentation/web-api/concepts/rate-limits
- */
-const MIN_LISTEN_MS = 5000;        // lägsta lyssning för att räkna som "spelas"
-const PLAYS_MAX = 500;             // max poster i minnesbuffer
-const PLAYS_RETENTION_DAYS = 14;   // äldre än så dumpas (policyvänligt)
+const MIN_LISTEN_MS = 5000;
+const PLAYS_MAX = 500;
+const PLAYS_RETENTION_DAYS = 14;
 const POLL_INTERVAL_MS = 1000;
 
 let plays = [];           // nyast först
-const seenKeys = new Set(); // id@started_at
+const seenKeys = new Set();
 function prunePlays() {
   const cutoff = Date.now() - PLAYS_RETENTION_DAYS*24*3600*1000;
   plays = plays.filter(p => toMs(p.started_at) >= cutoff).slice(0, PLAYS_MAX);
-  // bygga om seenKeys för att undvika att den växer utan gräns
   seenKeys.clear();
   for (const p of plays) seenKeys.add(`${p.id}@${p.started_at}`);
 }
@@ -177,17 +164,13 @@ function loadPlaysFromDisk() {
     if (!fs.existsSync(PLAYS_FILE)) return;
     const rows = fs.readFileSync(PLAYS_FILE, "utf8").trim().split("\n").filter(Boolean);
     const acc = [];
-    for (const line of rows.slice(-1000)) { // läs bara sista 1000 för fart
-      try { acc.push(JSON.parse(line)); } catch {}
-    }
+    for (const line of rows.slice(-1000)) { try { acc.push(JSON.parse(line)); } catch {} }
     acc.sort((a,b)=> toMs(b.started_at)-toMs(a.started_at));
     plays = acc.slice(0, PLAYS_MAX);
     for (const p of plays) seenKeys.add(`${p.id}@${p.started_at}`);
     prunePlays();
     console.log("[plays] loaded", plays.length);
-  } catch (e) {
-    console.warn("[plays] load error", e.message);
-  }
+  } catch (e) { console.warn("[plays] load error", e.message); }
 }
 function appendPlay(p) {
   const key = `${p.id}@${p.started_at}`;
@@ -198,8 +181,8 @@ function appendPlay(p) {
   try { fs.appendFileSync(PLAYS_FILE, JSON.stringify(p) + "\n"); } catch {}
 }
 
-let lastNow = { playing:false };   // exponeras via /now-playing (snapshot)
-let lastTrack = null;              // internt: {id,title,artists, image,url, duration_ms, start_ts, last_seen_ts, progress_ms}
+let lastNow = { playing:false };   // exponeras via /now-playing
+let lastTrack = null;              // internt
 
 let pollingStarted = false;
 let backoffUntil = 0;
@@ -233,7 +216,7 @@ async function pollLoop() {
       }
 
       if (r.status === 204) {
-        // Ingenting spelas – om vi hade en pågående track, gör inget (vi loggar på riktig låtbyte)
+        // inget spelas och ingen paus-info – stäng kortet
         lastNow = { playing:false };
         await sleep(POLL_INTERVAL_MS);
         continue;
@@ -245,13 +228,16 @@ async function pollLoop() {
       }
 
       const json = await r.json();
-      if (!json?.is_playing || !json?.item) {
+      const item = json?.item || null;
+      const isPlaying = !!json?.is_playing;
+
+      if (!item) {
+        // ingen item – visa tomt
         lastNow = { playing:false };
         await sleep(POLL_INTERVAL_MS);
         continue;
       }
 
-      const item = json.item;
       const progress_ms = json.progress_ms || 0;
       const duration_ms = item.duration_ms || 0;
       const start_ts = Date.now() - progress_ms;
@@ -269,9 +255,8 @@ async function pollLoop() {
         last_seen_ts: Date.now()
       };
 
-      // LÅTBYTE? (olika ID)
+      // Låtbyte?
       if (lastTrack?.id && current.id !== lastTrack.id) {
-        // lägg in lastTrack som spelad om den varat tillräckligt länge
         const listened = (lastTrack.last_seen_ts || Date.now()) - (lastTrack.start_ts || Date.now());
         if (listened >= MIN_LISTEN_MS) {
           appendPlay({
@@ -286,33 +271,48 @@ async function pollLoop() {
           });
         }
       } else if (lastTrack?.id === current.id) {
-        // Samma låt – om användaren backat i låten (progress minskar), uppdatera start_ts
         if (typeof lastTrack.progress_ms === "number" && progress_ms + 1500 < lastTrack.progress_ms) {
-          current.start_ts = Date.now() - progress_ms; // redan satt
+          current.start_ts = Date.now() - progress_ms;
         } else {
-          // behåll ursprungligt start_ts om vi haft det längre
           current.start_ts = Math.min(current.start_ts, lastTrack.start_ts || current.start_ts);
         }
       }
-
       lastTrack = current;
 
-      // Uppdatera publikt snapshot för /now-playing
-      lastNow = {
-        playing: true,
-        type: "track",
-        id: current.id,
-        title: current.title,
-        artists: current.artists,
-        album: current.album,
-        url: current.url,
-        image: current.image,
-        progress_ms: progress_ms,
-        duration_ms: duration_ms
-      };
+      // Publikt snapshot:
+      if (isPlaying) {
+        lastNow = {
+          playing: true,
+          paused: false,
+          type: "track",
+          id: current.id,
+          title: current.title,
+          artists: current.artists,
+          album: current.album,
+          url: current.url,
+          image: current.image,
+          progress_ms,
+          duration_ms
+        };
+      } else {
+        // PAUS: behåll kortet med pausad tid
+        lastNow = {
+          playing: false,
+          paused: true,
+          type: "track",
+          id: current.id,
+          title: current.title,
+          artists: current.artists,
+          album: current.album,
+          url: current.url,
+          image: current.image,
+          progress_ms,
+          duration_ms
+        };
+      }
 
     } catch (e) {
-      // swallow
+      // ignore
     }
 
     await sleep(POLL_INTERVAL_MS);
@@ -323,55 +323,39 @@ loadPlaysFromDisk();
 pollLoop();
 
 /* ----------------------------- Publika endpoints -------------------------- */
-
-// Nuvarande snapshot – ingen Spotify-call här: vi läser från lastNow
 app.get("/now-playing", (req, res) => {
   noStore(res);
   res.json(lastNow || { playing:false });
 });
 
-// Våra egna “recent”: byggda av plays-loggen
-// - default: unika låtar (som du ville tidigare)
-// - ?dupes=1 => exakt tre senaste spelningarna (även samma låt flera gånger i rad)
-// - ?limit=3 (valfri, default 3)
+// recent byggt av plays-loggen
 app.get("/recent", (req, res) => {
   noStore(res);
-  let limit = clamp(parseInt(req.query.limit || "3", 10) || 3, 1, 50);
+  const clampNum=(v,min,max)=>Math.max(min,Math.min(max, v|0));
+  let limit = clampNum(parseInt(req.query.limit || "3", 10) || 3, 1, 50);
   const allowDupes = String(req.query.dupes||"").toLowerCase() === "1" || String(req.query.distinct||"") === "0";
   const excludeId = (req.query.exclude_id || "").trim();
 
-  // sortera nyast först (plays är redan nyast först, men defensivt)
   const items = [...plays].sort((a,b)=> toMs(b.started_at)-toMs(a.started_at));
-
   const out = [];
   const seen = new Set();
   for (const p of items) {
     if (!p.id) continue;
     if (excludeId && p.id === excludeId) continue;
-    if (!allowDupes) {
-      if (seen.has(p.id)) continue;
-      seen.add(p.id);
-    }
+    if (!allowDupes) { if (seen.has(p.id)) continue; seen.add(p.id); }
     out.push({
-      id: p.id,
-      title: p.title,
-      artists: p.artists,
-      image: p.image,
-      url: p.url,
-      played_at: p.started_at
+      id: p.id, title: p.title, artists: p.artists, image: p.image, url: p.url, played_at: p.started_at
     });
     if (out.length >= limit) break;
   }
   res.json({ items: out });
 });
 
-// Rå dump för insyn
 app.get("/recent/raw", (_req, res) => {
   noStore(res);
   res.json({ count: plays.length, items: plays.slice(0, 50) });
 });
 
-// Diagnos – vem är inloggad osv.
 app.get("/whoami", async (_req, res) => {
   noStore(res);
   try {
@@ -383,9 +367,7 @@ app.get("/whoami", async (_req, res) => {
     let bodyJson = null; try { bodyJson = JSON.parse(bodyText); } catch {}
     if (!r.ok) return res.status(r.status).json({ ok:false, status:r.status, content_type: ct, error: bodyJson || bodyText.slice(0,200) });
     return res.json({ ok:true, id: bodyJson.id, display_name: bodyJson.display_name, product: bodyJson.product, country: bodyJson.country });
-  } catch (e) {
-    return res.status(500).json({ ok:false, error:String(e) });
-  }
+  } catch (e) { return res.status(500).json({ ok:false, error:String(e) }); }
 });
 
 /* ------------------------------ Admin utils ------------------------------- */
