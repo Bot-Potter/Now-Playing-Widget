@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="sv">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Recent Debug</title>
+<style>
+  body{font-family:system-ui;margin:20px;background:#0b0710;color:#f6e9f5}
+  h1,h2{margin:0 0 10px}
+  .row{display:flex;gap:20px;flex-wrap:wrap}
+  .card{background:#1b1322;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:12px;min-width:280px;flex:1}
+  pre{white-space:pre-wrap;word-break:break-word;background:#0e0a12;border-radius:8px;padding:10px}
+  button{background:#c84cff;border:0;color:#fff;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer}
+  label{display:flex;gap:8px;align-items:center}
+  input{width:80px}
+  .ok{color:#9cff9c}.bad{color:#ff9c9c}
+</style>
+<body>
+  <h1>Recent Debug</h1>
+
+  <div class="row">
+    <div class="card">
+      <h2>/recent (client)</h2>
+      <div id="current"></div>
+      <pre id="currentRaw"></pre>
+    </div>
+
+    <div class="card">
+      <h2>/recent/diagnose</h2>
+      <div id="diagInfo"></div>
+      <pre id="diag"></pre>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h2>/recent/probe</h2>
+      <label>seconds <input id="sec" type="number" value="60" min="5" max="300"></label>
+      <label>interval <input id="intv" type="number" value="5" min="1" max="10"></label>
+      <div style="margin-top:8px"><button id="run">Run probe</button></div>
+      <div id="probeInfo"></div>
+      <pre id="probe"></pre>
+    </div>
+
+    <div class="card">
+      <h2>/recent/stream</h2>
+      <div id="streamState" class="bad">disconnected</div>
+      <pre id="stream"></pre>
+    </div>
+  </div>
+
+<script>
+async function loadRecent() {
+  const r = await fetch("/recent?dupes=1",{cache:"no-store"});
+  const j = await r.json();
+  document.getElementById("currentRaw").textContent = JSON.stringify(j, null, 2);
+  const items = j.items||[];
+  const html = items.map((x,i)=>`${i+1}. ${x.title} — ${x.artists.join(", ")}\n   played_at: ${x.played_at}`).join("\n");
+  document.getElementById("current").textContent = html || "(tom)";
+}
+
+async function loadDiag() {
+  const r = await fetch("/recent/diagnose",{cache:"no-store"});
+  const j = await r.json();
+  document.getElementById("diag").textContent = JSON.stringify(j, null, 2);
+  document.getElementById("diagInfo").innerHTML =
+    (j.ok?'<span class="ok">ok</span>':'<span class="bad">bad</span>') +
+    (j.whoami?` — whoami: ${j.whoami.name || j.whoami.id}`:"") +
+    ` — recent_count: ${j.recent_count}`;
+}
+
+async function runProbe() {
+  const s = Math.max(5, Math.min(300, Number(document.getElementById("sec").value)||60));
+  const i = Math.max(1, Math.min(10, Number(document.getElementById("intv").value)||5));
+  document.getElementById("probeInfo").textContent = "Running probe…";
+  const r = await fetch(`/recent/probe?seconds=${s}&interval=${i}`, {cache:"no-store"});
+  const j = await r.json();
+  document.getElementById("probe").textContent = JSON.stringify(j, null, 2);
+  let timeline = "";
+  (j.samples||[]).forEach((smp, idx) => {
+    const t = new Date(smp.t).toLocaleTimeString();
+    if (smp.ok && smp.top) {
+      timeline += `${idx+1}) ${t}  ${smp.top.title} — ${smp.top.artists.join(", ")}  played_at=${smp.top.played_at}\n`;
+    } else {
+      timeline += `${idx+1}) ${t}  [${smp.status}] no data\n`;
+    }
+  });
+  document.getElementById("probeInfo").textContent = timeline || "(no samples)";
+}
+
+function startStream() {
+  try {
+    const es = new EventSource("/recent/stream");
+    const st = document.getElementById("streamState");
+    const pre = document.getElementById("stream");
+    es.onopen = () => { st.textContent = "connected"; st.className="ok"; };
+    es.onerror = () => { st.textContent = "disconnected"; st.className="bad"; };
+    es.addEventListener("change", (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        const line = `[${new Date().toLocaleTimeString()}] CHANGE → ${data.top.title} — ${data.top.artists.join(", ")} played_at=${data.top.played_at}\n`;
+        pre.textContent = line + pre.textContent;
+      } catch {}
+    });
+  } catch (e) {
+    document.getElementById("streamState").textContent = "error";
+  }
+}
+
+loadRecent();
+loadDiag();
+startStream();
+setInterval(loadRecent, 2000);
+setInterval(loadDiag, 10000);
+document.getElementById("run").addEventListener("click", runProbe);
+</script>
+</body>
+</html>
