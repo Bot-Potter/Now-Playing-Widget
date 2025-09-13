@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import tmi from "tmi.js";
 
 dotenv.config();
 
@@ -17,7 +18,12 @@ const {
   SPOTIFY_CLIENT_SECRET,
   SPOTIFY_REDIRECT_URI,
   PORT = process.env.PORT || 3000,
-  ADMIN_SECRET
+  ADMIN_SECRET,
+
+  // Twitch
+  TWITCH_USERNAME,
+  TWITCH_OAUTH_TOKEN,      // format: "oauth:xxxxxxxxxxxxxxxxxxxx"
+  TWITCH_CHANNEL           // t.ex. "maccanzz" (lowercase)
 } = process.env;
 
 /* ---------------- Helpers ---------------- */
@@ -140,12 +146,12 @@ async function getAccessToken() {
    STATE: now + snapshot + local recent + 500ms tick
    ========================================================== */
 let lastNow = { playing: false };
-let rawIsPlaying = false;           // senast rapporterade spelstatus från Spotify
-let lastTrackSnapshot = null;       // senast aktiva track
+let rawIsPlaying = false;           // senaste Spotify-status (spelar/paus)
+let lastTrackSnapshot = null;       // senast aktiva track (för paus)
 let lastTrackSeenAt = 0;
 const SNAPSHOT_TTL_MS = 2 * 60 * 1000;
 
-let localRecent = [];               // byggs endast av spårbyten via now
+let localRecent = [];               // byggs av spårbyten
 const LOCAL_RECENT_MAX = 50;
 
 function simplifyTrack(json) {
@@ -174,12 +180,12 @@ function pushLocalRecentFrom(prevTrack) {
     url: prevTrack.url || "",
     played_at: new Date().toISOString()
   };
-  if (localRecent[0]?.id === entry.id) return;      // undvik dubbletter i rad
+  if (localRecent[0]?.id === entry.id) return; // undvik dubbletter i rad
   localRecent.unshift(entry);
   if (localRecent.length > LOCAL_RECENT_MAX) localRecent.length = LOCAL_RECENT_MAX;
 }
 
-/* --------- Spotify fetch (nu var 500 ms) --------- */
+/* --------- Spotify fetch (var 500 ms) --------- */
 async function refreshFromSpotify() {
   try {
     const at = await getAccessToken();
@@ -189,43 +195,32 @@ async function refreshFromSpotify() {
       headers: { Authorization: `Bearer ${at}` }
     });
 
-    if (r.status === 204) {
-      rawIsPlaying = false;
-      lastNow = { playing:false };
-      return;
-    }
-    if (!r.ok) {
-      rawIsPlaying = false;
-      lastNow = { playing:false };
-      return;
-    }
+    if (r.status === 204) { rawIsPlaying = false; lastNow = { playing:false }; return; }
+    if (!r.ok)          { rawIsPlaying = false; lastNow = { playing:false }; return; }
 
     const json = await r.json();
     const isPlaying = !!json?.is_playing;
     rawIsPlaying = isPlaying;
 
-    if (!isPlaying) {
-      lastNow = { playing:false };
-      return;
-    }
+    if (!isPlaying) { lastNow = { playing:false }; return; }
 
     const payload = simplifyTrack(json);
 
-    // Trackbyte? lägg förra i recent
+    // Trackbyte? – lägg tidigare i localRecent
     if (lastTrackSnapshot?.id && lastTrackSnapshot.id !== payload.id) {
       pushLocalRecentFrom(lastTrackSnapshot);
     }
 
-    lastNow = payload;                     // nu spelas
-    lastTrackSnapshot = { ...payload };    // snapshot (för paus)
+    lastNow = payload;
+    lastTrackSnapshot = { ...payload };
     lastTrackSeenAt = Date.now();
 
   } catch {
-    // nätverksfel -> gör inget, tick hanterar progress när playing
+    // nätverksfel ignoreras – ticken fortsätter endast när playing=true
   }
 }
 
-/* --------- 500ms tick: öka progress lokalt endast när playing ---------- */
+/* --------- 500 ms tick: öka progress lokalt när playing ---------- */
 const TICK_MS = 500;
 setInterval(() => {
   if (!rawIsPlaying) return;
@@ -239,10 +234,10 @@ setInterval(() => {
   }
 }, TICK_MS);
 
-/* --------- Kör Spotify-fetch var 500 ms för snabb paus-detektering ----- */
+/* --------- Kör Spotify-fetch var 500 ms --------- */
 setInterval(refreshFromSpotify, 500);
 
-/* ---------------- Endpoints ---------------- */
+/* ---------------- API Endpoints ---------------- */
 
 // Nu spelas
 app.get("/now-playing", (_req, res) => {
@@ -253,7 +248,7 @@ app.get("/now-playing", (_req, res) => {
   return res.json({ playing:false });
 });
 
-// Snapshot/paus: signalera tydligt paused:true (playing:false)
+// Snapshot/paus
 app.get("/now-snapshot", (_req, res) => {
   noStore(res);
   const fresh = lastTrackSnapshot && (Date.now() - lastTrackSeenAt) < SNAPSHOT_TTL_MS;
@@ -261,7 +256,7 @@ app.get("/now-snapshot", (_req, res) => {
   return res.json({ ...lastTrackSnapshot, snapshot:true, playing:false, paused:true });
 });
 
-// Recent från lokalt minne (byggt vid track-byten)
+// Recent från lokalt minne
 app.get("/recent", (req, res) => {
   noStore(res);
   const excludeId = (req.query.exclude_id || "").trim() || null;
@@ -277,6 +272,51 @@ app.get("/recent", (req, res) => {
   }
   res.json({ items: out });
 });
+
+/* ---------------- SSE för overlay ---------------- */
+const sseClients = new Set();
+app.get("/events", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+  res.write(`: connected\n\n`);
+  sseClients.add(res);
+  const keep = setInterval(() => {
+    if (res.writableEnded) return clearInterval(keep);
+    res.write(`: ping ${Date.now()}\n\n`);
+  }, 15000);
+  req.on("close", () => { clearInterval(keep); sseClients.delete(res); });
+});
+function broadcastSSE(type, payload) {
+  const data = `event: ${type}\n` + `data: ${JSON.stringify(payload)}\n\n`;
+  for (const client of sseClients) {
+    if (!client.writableEnded) client.write(data);
+  }
+}
+
+/* ---------------- Twitch listener (tmi.js) ---------------- */
+if (TWITCH_USERNAME && TWITCH_OAUTH_TOKEN && TWITCH_CHANNEL) {
+  const tmiClient = new tmi.Client({
+    identity: { username: TWITCH_USERNAME, password: TWITCH_OAUTH_TOKEN },
+    channels: [ TWITCH_CHANNEL ]
+  });
+  tmiClient.connect()
+    .then(() => console.log(`[tmi] Connected to #${TWITCH_CHANNEL}`))
+    .catch(err => console.error("[tmi] connect error", err));
+
+  const SONG_CMD = /^(?:!song|!låt)\b/i;
+  tmiClient.on("message", (_channel, userstate, message, self) => {
+    if (self) return;
+    if (SONG_CMD.test(message)) {
+      const by = userstate["display-name"] || userstate.username || "someone";
+      broadcastSSE("song", { by, at: Date.now() });
+      console.log(`[tmi] !song by ${by}`);
+    }
+  });
+} else {
+  console.warn("[tmi] Twitch vars missing, skipping chat listener");
+}
 
 /* ---------------- Admin & Debug ---------------- */
 app.get("/env-check", (_req, res) => {
