@@ -67,187 +67,201 @@
     <div id="recent" class="recent" aria-label="Senaste låtar"></div>
   </div>
 
-  <script>
-    const API_NOW = "/now-playing";
-    const API_REC = "/recent";
+<script>
+  const API_NOW = "/now-playing";
+  const API_REC = "/recent"; // ändra till "/recent?dupes=1" om du vill tillåta dubbletter
 
-    const el = {
-      cardLink: document.getElementById("cardLink"),
-      bg: document.getElementById("bg"), content: document.getElementById("content"), empty: document.getElementById("empty"),
-      cover: document.getElementById("cover"), title: document.getElementById("title"), artist: document.getElementById("artist"),
-      tStart: document.getElementById("tStart"), tEnd: document.getElementById("tEnd"), bar: document.getElementById("bar"),
-      recent: document.getElementById("recent")
-    };
+  const el = {
+    cardLink:document.getElementById("cardLink"),
+    bg:document.getElementById("bg"), content:document.getElementById("content"), empty:document.getElementById("empty"),
+    cover:document.getElementById("cover"), title:document.getElementById("title"), artist:document.getElementById("artist"),
+    tStart:document.getElementById("tStart"), tEnd:document.getElementById("tEnd"), bar:document.getElementById("bar"),
+    recent:document.getElementById("recent")
+  };
 
-    let nowData = { playing: false };
-    let baseProgress = 0;
-    let duration = 1;
-    let lastPollTs = 0;
-    let currentId = null;
-    let rafId = null;
+  /* ---------- utils ---------- */
+  const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
 
-    const ms = (x = 0) => {
-      x = Math.max(0, x|0);
-      const s = Math.floor(x/1000), m = Math.floor(s/60);
-      return `${m}:${String(s % 60).padStart(2, "0")}`;
-    };
+  async function dominantColorFromURL(url){
+    return new Promise((resolve)=>{
+      const img = new Image(); img.crossOrigin="anonymous";
+      img.onload=()=>{
+        const w=50,h=50; const c=document.createElement("canvas"); c.width=w;c.height=h;
+        const ctx=c.getContext("2d",{willReadFrequently:true});
+        ctx.drawImage(img,0,0,w,h);
+        const {data}=ctx.getImageData(0,0,w,h);
+        let r=0,g=0,b=0,count=0;
+        for(let i=0;i<data.length;i+=4){ if(data[i+3]<128) continue; r+=data[i];g+=data[i+1];b+=data[i+2];count++; }
+        if(!count) return resolve("#c84cff");
+        r=Math.round(r/count);g=Math.round(g/count);b=Math.round(b/count);
+        resolve(`rgb(${r}, ${g}, ${b})`);
+      };
+      img.onerror=()=>resolve("#c84cff");
+      img.src=url;
+    });
+  }
+  const setAccent=(c)=>document.documentElement.style.setProperty("--accent",c);
 
-    async function dominantColorFromURL(url) {
-      return new Promise((resolve) => {
-        const img = new Image(); img.crossOrigin = "anonymous";
-        img.onload = () => {
-          const w = 50, h = 50;
-          const c = document.createElement("canvas"); c.width = w; c.height = h;
-          const ctx = c.getContext("2d",{willReadFrequently:true});
-          ctx.drawImage(img, 0, 0, w, h);
-          const { data } = ctx.getImageData(0,0,w,h);
-          let r = 0, g = 0, b = 0, count = 0;
-          for(let i = 0; i < data.length; i += 4) {
-            if(data[i+3] < 128) continue;
-            r += data[i];
-            g += data[i+1];
-            b += data[i+2];
-            count++;
-          }
-          if(!count) return resolve("#c84cff");
-          r = Math.round(r/count);
-          g = Math.round(g/count);
-          b = Math.round(b/count);
-          resolve(`rgb(${r}, ${g}, ${b})`);
-        };
-        img.onerror = () => resolve("#c84cff");
-        img.src = url;
-      });
+  /* ---------- Smooth progress med mjuk resync + pausfrys ---------- */
+  let currentMeta = null;       // senaste kända metadata (titel, bild, osv.)
+  let isPlaying = false;        // spelar just nu
+  let duration = 1;             // ms
+  let targetBase = 0;           // progress_ms vid senaste poll
+  let lastSyncTs = 0;           // Date.now() när vi satte targetBase
+  let displayProg = 0;          // det vi faktiskt renderar (smooth)
+  let currentId = null;
+  let rafId = 0;
+
+  // hur snabbt vi får “hinna ikapp” serverns tid (ms per frame)
+  // högre => snabbare korrigering, men risk för synlig ryckighet. 40–80 funkar bra.
+  const MAX_CORRECTION_PER_FRAME = 60;
+
+  function paintStatic(meta){
+    if(!meta){
+      el.content.hidden=true; el.empty.hidden=false; el.bg.style.backgroundImage="";
+      el.cardLink.href="#"; el.bar.style.width="0%"; el.tStart.textContent="0:00"; el.tEnd.textContent="0:00";
+      return;
+    }
+    el.content.hidden=false; el.empty.hidden=true;
+
+    el.title.textContent=meta.title||"Okänd låt";
+    el.artist.textContent=(meta.artists||[]).join(", ")||meta.album||"";
+    el.tEnd.textContent=ms(duration||0);
+
+    if(meta.image){
+      el.cover.src=meta.image;
+      el.bg.style.backgroundImage=`url("${meta.image}")`;
+      dominantColorFromURL(meta.image).then(setAccent);
+    }
+    el.cardLink.href = meta.url || "#";
+  }
+
+  function tick(){
+    // Räkna ut "målprogress"
+    const elapsed = Math.max(0, Date.now() - lastSyncTs);
+    const targetNow = isPlaying ? targetBase + elapsed : targetBase; // frys när paus
+
+    // Korrigera mjukt mot targetNow (ingen back-jump)
+    let diff = targetNow - displayProg;
+    const step = Math.sign(diff) * Math.min(Math.abs(diff), MAX_CORRECTION_PER_FRAME);
+
+    displayProg = Math.max(0, Math.min(duration, displayProg + step));
+
+    // Render
+    if (currentMeta){
+      el.tStart.textContent = ms(displayProg);
+      el.bar.style.width = (100 * displayProg / duration) + "%";
     }
 
-    function setAccent(c) {
-      document.documentElement.style.setProperty("--accent", c);
-    }
-
-    function paintNowStatic(d) {
-      if(!d || !d.playing) {
-        el.content.hidden = true;
-        el.empty.hidden = false;
-        el.bg.style.backgroundImage = "";
-        el.cardLink.href = "#";
-        el.bar.style.width = "0%";
-        el.tStart.textContent = "0:00";
-        el.tEnd.textContent = "0:00";
-        return;
-      }
-      el.content.hidden = false;
-      el.empty.hidden = true;
-
-      el.title.textContent = d.title || "Okänd låt";
-      el.artist.textContent = (d.artists || []).join(", ") || d.album || "";
-      el.tEnd.textContent = ms(d.duration_ms || 0);
-
-      if(d.image) {
-        el.cover.src = d.image;
-        el.bg.style.backgroundImage = `url("${d.image}")`;
-        dominantColorFromURL(d.image).then(setAccent);
-      }
-      el.cardLink.href = d.url || "#";
-    }
-
-    function tick() {
-      if (!nowData.playing) {
-        rafId = requestAnimationFrame(tick);
-        return;
-      }
-      const elapsed = Date.now() - lastPollTs;
-      const prog = Math.min(duration, Math.max(0, baseProgress + elapsed));
-      el.tStart.textContent = ms(prog);
-      el.bar.style.width = (100 * prog / duration) + "%";
-      rafId = requestAnimationFrame(tick);
-    }
-
-    async function pollNow() {
-      try {
-        const r = await fetch(API_NOW, { cache:"no-store" });
-        const d = await r.json();
-        nowData = d;
-
-        if (!d || !d.playing) {
-          currentId = null;
-          baseProgress = 0;
-          duration = 1;
-          lastPollTs = Date.now();
-          paintNowStatic(d);
-          return;
-        }
-
-        if (d.id !== currentId) {
-          currentId = d.id;
-          paintNowStatic(d);
-        }
-
-        duration     = Math.max(1, d.duration_ms || 1);
-        baseProgress = Math.min(duration, Math.max(0, d.progress_ms || 0));
-        lastPollTs   = Date.now();
-
-      } catch(e) {
-        console.warn("pollNow error:", e);
-      }
-    }
-
-    let lastRecentKey = "";
-
-    function renderRecent(list) {
-      const ids = list.map(x => x.id || "-");
-      const key = ids.join("|");
-      if (key === lastRecentKey) return;
-
-      el.recent.innerHTML = "";
-      const three = list.slice(0,3);
-      for(const it of three) {
-        const a = document.createElement("a");
-        a.className = "chip"; a.href = it.url || "#";
-        a.target = "_blank"; a.rel = "noopener";
-        a.innerHTML = `
-          <img src="${it.image || ""}" alt="">
-          <div class="text">
-            <div class="t">${it.title || ""}</div>
-            <div class="a">${(it.artists || []).join(", ")}</div>
-          </div>
-        `;
-        el.recent.appendChild(a);
-      }
-      for(let k = three.length; k < 3; k++){
-        const ph = document.createElement("div");
-        ph.className="chip";
-        ph.style.visibility="hidden";
-        el.recent.appendChild(ph);
-      }
-      lastRecentKey = key;
-    }
-
-    async function pollRecent() {
-      try {
-        const exclude = nowData?.id ? `?exclude_id=${encodeURIComponent(nowData.id)}` : "";
-        const r = await fetch(API_REC + exclude, { cache:"no-store" });
-        const data = await r.json();
-        const list = Array.isArray(data.items) ? data.items : [];
-        renderRecent(list);
-      } catch(e) {
-        console.warn("pollRecent error:", e);
-      }
-    }
-
-    function onVis() {
-      if (document.visibilityState === "visible") {
-        pollNow();
-        pollRecent();
-      }
-    }
-    document.addEventListener("visibilitychange", onVis);
-
-    pollNow();
-    pollRecent();
-    setInterval(pollNow, 1000);
-    setInterval(pollRecent, 1000);
     rafId = requestAnimationFrame(tick);
+  }
 
-  </script>
+  async function pollNow(){
+    try{
+      const r = await fetch(API_NOW, { cache:"no-store" });
+      const d = await r.json();
+
+      if (!d || !d.playing) {
+        // PAUS / INTE SPELAS:
+        // - behåll currentMeta om vi redan har något (visa fryst progress)
+        // - frys targetBase på senaste kända displayProg så vi inte hoppar till 0
+        isPlaying = false;
+
+        if (currentMeta){
+          targetBase = displayProg;   // frys där vi är
+          lastSyncTs = Date.now();    // nollar elapsed
+          // OBS: vi kallar INTE paintStatic(null) – vi vill fortsätta visa kortet
+        } else {
+          // inget att visa ännu (aldrig spelat), visa "tomt"
+          paintStatic(null);
+        }
+        return;
+      }
+
+      // SPELAR:
+      isPlaying = true;
+
+      // metadata för kortet
+      const meta = {
+        id: d.id, title: d.title, artists: d.artists, album: d.album,
+        url: d.url, image: d.image
+      };
+
+      // låtbyte → uppdatera UI direkt
+      if (meta.id !== currentId){
+        currentId = meta.id;
+        currentMeta = meta;
+        duration = Math.max(1, d.duration_ms || 1);
+        paintStatic(meta);
+        // direkt sätt displayProg nära serverprogress för seamless start
+        displayProg = Math.min(duration, Math.max(0, d.progress_ms || 0));
+      }
+
+      // resyncmål sätts alltid – men vi undviker bakåtsprång pga mjuk korrigering i tick()
+      duration   = Math.max(1, d.duration_ms || 1);
+      targetBase = Math.min(duration, Math.max(0, d.progress_ms || 0));
+      lastSyncTs = Date.now();
+
+    }catch(e){
+      // nätverksglitch → gör inget, tick fortsätter på senaste kända data
+    }
+  }
+
+  /* ---------- RECENT (oförändrad render, uppdateras 1 Hz) ---------- */
+  let lastRecentKey = "";
+  function renderRecent(list){
+    const ids = list.map(x => x.id || "-");
+    const key = ids.join("|");
+    if (key === lastRecentKey) return;
+
+    el.recent.innerHTML="";
+    const three = list.slice(0,3);
+    for(const it of three){
+      const a=document.createElement("a");
+      a.className="chip"; a.href=it.url||"#"; a.target="_blank"; a.rel="noopener";
+      a.innerHTML = `
+        <img src="${it.image||""}" alt="">
+        <div class="text">
+          <div class="t">${it.title||""}</div>
+          <div class="a">${(it.artists||[]).join(", ")}</div>
+        </div>
+      `;
+      el.recent.appendChild(a);
+    }
+    for(let k=three.length;k<3;k++){
+      const ph=document.createElement("div"); ph.className="chip"; ph.style.visibility="hidden";
+      el.recent.appendChild(ph);
+    }
+    lastRecentKey = key;
+  }
+
+  async function pollRecent(){
+    try{
+      const exclude = currentId ? `?exclude_id=${encodeURIComponent(currentId)}` : "";
+      const r = await fetch(API_REC + exclude, { cache:"no-store" });
+      const data = await r.json();
+      const list = Array.isArray(data.items) ? data.items : [];
+      renderRecent(list);
+    }catch{}
+  }
+
+  /* ---------- Visibility: resynka när fliken återkommer ---------- */
+  function onVis(){
+    if(document.visibilityState === "visible"){
+      // hämta färsk data och sätt targetBase exakt
+      pollNow(); pollRecent();
+      lastSyncTs = Date.now();
+    }
+  }
+  document.addEventListener("visibilitychange", onVis);
+
+  /* ---------- start ---------- */
+  pollNow(); pollRecent();
+  setInterval(pollNow, 1000);
+  setInterval(pollRecent, 1000);
+
+  cancelAnimationFrame(rafId);
+  rafId = requestAnimationFrame(tick);
+</script>
 </body>
 </html>
