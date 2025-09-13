@@ -1,41 +1,24 @@
-# 🎵 Spotify Now Playing Widget + Twitch Overlay
+# 🎵 Spotify Now Playing Widget + Twitch Overlay  
 
-Detta projekt visar i realtid vilken låt som spelas på Spotify.  
-Det innehåller även en Twitch-overlay som kan triggas när någon i din chatt skriver `!song` eller `!låt`.  
-
-Widgeten är byggd för att vara **snygg, responsiv och enkel att integrera** i både vanliga hemsidor och OBS.  
-Funktionaliteten är helt fristående – du behöver bara köra en Node.js-server, koppla in ditt Spotify-konto och valfritt en Twitch-bot.
+Detta projekt visar i realtid vilken låt som spelas på Spotify. Det innehåller även en Twitch-overlay som kan triggas när någon i din chatt skriver `!song` eller `!låt`. Widgeten är byggd för att vara snygg, responsiv och enkel att integrera i både vanliga hemsidor och OBS. Funktionaliteten är helt fristående – du behöver bara köra en Node.js-server, koppla in ditt Spotify-konto och valfritt en Twitch-bot.  
 
 ---
 
-## 🚀 Funktioner
+## 🚀 Funktioner  
 
-- **Now Playing-kort**  
-  - Visar låtens titel, artist, albumomslag och progressbar.  
-  - Färgsätts automatiskt efter dominerande färg i albumomslaget.  
-
-- **Pausläge**  
-  - När låten pausas behålls albumomslag och färgtema.  
-  - Texten *“Ingen låt spelas just nu”* visas.  
-
-- **Senaste spelade låtar**  
-  - Visar de tre senaste spåren (byggs lokalt vid track-byte, undviker spam mot Spotify API).  
-
-- **Twitch-overlay**  
-  - När någon skriver `!song` eller `!låt` i din chatt, triggas overlayen i OBS.  
-  - Kortet flyger in underifrån, visas i 10 sekunder och försvinner igen.  
-
-- **Anpassningsbar inbäddning**  
-  - Transparent bakgrund (`?bg=transparent`).  
-  - Dölj senaste spelade-låtarna (`?recent=0`).  
+- Now Playing-kort som visar låtens titel, artist, albumomslag och progressbar, färgsatt efter albumets dominerande färg.  
+- Pausläge som behåller omslag och färgtema men visar texten *“Ingen låt spelas just nu”*.  
+- Senaste 3 spelade låtar (byggs lokalt vid track-byte för att undvika spam mot Spotify API).  
+- Twitch-overlay som triggas av chattkommandon `!song` / `!låt`, där kortet flyger in, visas i 10 sekunder och försvinner.  
+- Anpassningsbar inbäddning med parametrar som transparent bakgrund (`?bg=transparent`) eller dölja recent (`?recent=0`).  
 
 ---
 
-## 📂 Projektstruktur
+## 📂 Projektstruktur  
 
 /public
 index.html ← huvudwidgeten
-overlay.html ← OBS-overlay för !song
+overlay.html ← OBS-overlay
 app.js ← frontend-logik
 server.js ← Node.js/Express-server (Spotify API + SSE + Twitch listener)
 refresh_token.json ← sparad refresh token från Spotify
@@ -46,9 +29,9 @@ Kopiera kod
 
 ---
 
-## ⚙️ Installation
+## ⚙️ Installation  
 
-### 1. Klona repot
+### 1. Klona repot  
 ```bash
 git clone https://github.com/dittnamn/spotify-now-playing-widget.git
 cd spotify-now-playing-widget
@@ -80,33 +63,31 @@ Gå till Spotify Developer Dashboard.
 
 Skapa en ny app → kopiera Client ID och Client Secret.
 
-Lägg till Redirect URI:
+Lägg till Redirect URI: https://din-deploy-url/callback.
 
-arduino
-Kopiera kod
-https://din-deploy-url/callback
 Starta servern:
 
 bash
 Kopiera kod
 npm start
-Gå till http://localhost:3000/login, logga in → kopiera refresh_token → lägg i .env.
+Gå till http://localhost:3000/login, logga in → kopiera refresh token → lägg i .env.
 
 🖥️ Användning
-Starta servern
+Starta servern:
+
 bash
 Kopiera kod
 npm start
-Servern kör på http://localhost:3000.
+Servern körs på http://localhost:3000.
 
-Viktiga endpoints
-/ → huvudwidgeten (index.html)
+Endpoints
+/ → huvudwidgeten
 
-/overlay.html → OBS-overlay (visas på !song)
+/overlay.html → OBS-overlay
 
-/now-playing → aktuell låt
+/now-playing → nuvarande låt
 
-/now-snapshot → snapshot (för paus)
+/now-snapshot → snapshot för paus
 
 /recent → senaste spelade låtar (lokal buffer)
 
@@ -117,73 +98,59 @@ Viktiga endpoints
 /healthz → health check
 
 🎨 Frontend & parametrar
-Huvudwidget (index.html)
-Visar nuvarande låt och senaste 3 spelade.
-Kortet färgsätts efter albumomslaget och fallback är offwhite.
+Widgeten visar nuvarande låt + senaste 3 spelade. Kortet färgsätts efter albumomslaget med offwhite fallback.
 
-Parametrar
-?bg=transparent → gör bakgrunden genomskinlig.
+Parametrar:
 
-?recent=0 → döljer de tre senaste låtarna.
+?bg=transparent → gör bakgrunden genomskinlig
+
+?recent=0 → döljer “senaste spelade”-delen
 
 Exempel:
 
 bash
 Kopiera kod
 https://din-deploy-url/?bg=transparent&recent=0
-OBS-overlay
+OBS-overlay:
 Lägg till en Browser Source i OBS:
 
 URL: https://din-deploy-url/overlay.html
 
-Bredd/höjd: anpassa efter layout
+Bredd/Höjd: anpassa efter layout
 
-När någon skriver !song eller !låt i chatten visas kortet i 10 sekunder.
+När någon skriver !song i chatten visas kortet i 10 sekunder.
 
 🔧 Admin & Debug
-Sätt refresh token manuellt
+Sätt refresh token manuellt:
+
 bash
 Kopiera kod
 curl -X POST https://din-deploy-url/admin/set-refresh \
   -H "x-admin-secret: DIN_ADMIN_SECRET" \
   --data "din_refresh_token"
-Kolla Spotify-användare
+Kolla Spotify-användare:
+
 bash
 Kopiera kod
 GET /whoami
-Miljöcheck
+Kolla miljövariabler:
+
 sql
 Kopiera kod
 GET /env-check
 📸 Screenshots
-Now Playing widget (exempel)
-(lägg gärna till egna screenshots här)
+(Lägg gärna in screenshots på widgeten och overlay här.)
 
-📝 TODO & Idéer
- Cacha accent-färger för bättre prestanda.
+📝 TODO
+ Cacha accent-färger för bättre prestanda
 
- Lägg till fler chatkommandon (!lastsong, !album).
+ Fler chatkommandon som !lastsong
 
- Tema-val (ljus/mörk).
+ Tema-val (ljus/mörk)
 
- Visa längre historik än 3 låtar.
+ Visa längre historik än 3 låtar
 
 📜 Licens
-MIT – gör vad du vill, men länka gärna tillbaka till projektet.
+MIT – använd fritt men länka gärna tillbaka till projektet.
 
 👨‍💻 Byggt med ❤️ för Twitch & Spotify-communityn.
-
-yaml
-Kopiera kod
-
----
-
-Vill du att jag även skriver en **kortare README**-variant (bara usage + OBS) för repots framsida, så kan du ha den här längre i `docs/README.md`?
-
-
-
-
-
-
-
-Fråga ChatGPT
