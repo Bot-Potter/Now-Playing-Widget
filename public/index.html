@@ -71,10 +71,6 @@
   const API_NOW = "/now-playing";
   const API_REC = "/recent";
 
-  const params = new URLSearchParams(location.search);
-  // Styr paus-beteende: "empty" (default) = visa tomvy vid paus. "card" = visa kortet vid paus.
-  const PAUSED_MODE = (params.get("paused") || "empty").toLowerCase(); // "empty" | "card"
-
   const el = {
     cardLink:document.getElementById("cardLink"),
     bg:document.getElementById("bg"), content:document.getElementById("content"), empty:document.getElementById("empty"),
@@ -105,18 +101,17 @@
   }
   const setAccent=(c)=>document.documentElement.style.setProperty("--accent",c);
 
-  /* ------- NOW + smooth progress ------- */
-  // Tuning:
-  const SAFETY_LAG_MS = 250;   // större marginal → minskar risk för bakåthopp
-  const EASE = 0.35;           // hur snabbt visningen jagar estimerat värde (0..1)
+  /* ------- NOW + smooth progress (utan bakåthopp) ------- */
+  // Vi låter aldrig den visade tiden passera serverns progress.
+  const SAFETY_LAG_MS = 200; // liten buffert som gör att vi håller oss bakom servern
 
   let nowData = { playing:false, paused:false };
-  let baseProgress = 0;  // senaste serverprogress
+  let baseProgress = 0;  // serverns progress_ms vid senaste poll
   let duration = 1;
   let lastPollTs = 0;
   let currentId = null;
   let rafId = 0;
-  let shownProg = 0;
+  let shown = 0;         // visad progress (ms)
 
   function showEmpty(){
     el.content.hidden=true;
@@ -142,57 +137,34 @@
   }
 
   function paintNowStatic(d){
-    // Visa kort vid playing. Vid paus: styrs av parameter.
-    if(d?.playing){
-      showCard(d);
-      return;
-    }
-    if(d?.paused){
-      if(PAUSED_MODE === "card"){
-        showCard(d);
-        // Lås progress på pausposition
-        el.tStart.textContent = ms(d.progress_ms||0);
-        el.bar.style.width = (100 * (d.progress_ms||0) / Math.max(1, d.duration_ms||1)) + "%";
-      } else {
-        showEmpty();
-      }
-      return;
-    }
-    // Ingen låt/okänt => tomvy
+    // Krav: vid paus ska tomvy visas
+    if (d?.paused) { showEmpty(); return; }
+    if (d?.playing) { showCard(d); return; }
     showEmpty();
   }
 
   function tick(){
-    // Paus: antingen tomvy (empty) eller låst kort (card)
-    if (nowData.paused) {
-      if (PAUSED_MODE === "card") {
-        const prog = Math.min(duration, Math.max(0, baseProgress));
-        shownProg = prog;
-        el.tStart.textContent = ms(prog);
-        el.bar.style.width = (100 * prog / duration) + "%";
-      }
+    // Paus eller inget spelas => ingen tick, UI styrs av paintNowStatic
+    if (nowData.paused || !nowData.playing) {
       rafId = requestAnimationFrame(tick);
       return;
     }
 
-    if(!nowData.playing){
-      rafId = requestAnimationFrame(tick);
-      return;
+    // Beräkna en lokal uppskattning men håll den ALLTID <= serverns estimerade progress.
+    // Estimerad serverprogress just nu:
+    const serverEst = Math.min(duration, Math.max(0, baseProgress + Math.max(0, Date.now() - lastPollTs - SAFETY_LAG_MS)));
+
+    // Stega visningen mjukt mot serverEst, men aldrig förbi:
+    if (shown < serverEst) {
+      const step = Math.max(15, (serverEst - shown) * 0.25); // snabb nog men smoothing
+      shown = Math.min(serverEst, shown + step);
+    } else if (shown > serverEst) {
+      // Om servern hoppat bak (seek/paus) – snappa direkt nedåt för att undvika bakåthopp senare
+      shown = serverEst;
     }
 
-    // Estimera lokalt men håll oss bakom servern med säkerhetsmarginal.
-    const elapsed = Math.max(0, Date.now() - lastPollTs - SAFETY_LAG_MS);
-    const est = Math.min(duration, Math.max(0, baseProgress + elapsed));
-
-    // Om servern (baseProgress) skulle backa (seek/pause), backa fort men mjukt:
-    if (est < shownProg) {
-      shownProg += (est - shownProg) * 0.7;   // snabbare nedåt
-    } else {
-      shownProg += (est - shownProg) * EASE;  // mjuk uppåt
-    }
-
-    el.tStart.textContent = ms(shownProg);
-    el.bar.style.width = (100 * shownProg / duration) + "%";
+    el.tStart.textContent = ms(shown);
+    el.bar.style.width = (100 * shown / duration) + "%";
     rafId = requestAnimationFrame(tick);
   }
 
@@ -202,34 +174,40 @@
       const d = await r.json();
       nowData = d || { playing:false, paused:false };
 
-      // Varken playing eller paused => tomvy
-      if(!d || (!d.playing && !d.paused)){
-        currentId = null; baseProgress=0; duration=1; lastPollTs=Date.now(); shownProg=0;
+      // Paus => visa tomvy
+      if (d?.paused) {
+        currentId = d.id || null;
+        duration = Math.max(1, d.duration_ms || 1);
+        baseProgress = Math.min(duration, Math.max(0, d.progress_ms || 0));
+        lastPollTs = Date.now();
+        shown = baseProgress;
         paintNowStatic(d);
         return;
       }
 
-      // Byte av låt => uppdatera kort/bakgrund direkt
-      if(d.id !== currentId){
-        currentId = d.id;
+      // Inget spelas
+      if (!d || !d.playing) {
+        currentId = null;
+        baseProgress = 0; duration = 1; lastPollTs = Date.now(); shown = 0;
         paintNowStatic(d);
-      } else {
-        // Samma låt: vid paus/forts. kan vi behöva justera bara tiderna
-        if (d.paused && PAUSED_MODE === "card") {
-          showCard(d);
-        }
+        return;
+      }
+
+      // Spelas: uppdatera UI
+      if (d.id !== currentId) {
+        currentId = d.id;
+        showCard(d);
+        shown = Math.min(d.duration_ms || 1, Math.max(0, d.progress_ms || 0)); // starta visning på servervärdet
       }
 
       duration     = Math.max(1, d.duration_ms || 1);
-      const serverProg = Math.min(duration, Math.max(0, d.progress_ms || 0));
-
-      // Om vårt visade värde ligger märkbart framför → klipp ner så hopp bakåt inte syns
-      if (shownProg - serverProg > 250) shownProg = serverProg;
-
-      baseProgress = serverProg;
+      baseProgress = Math.min(duration, Math.max(0, d.progress_ms || 0));
       lastPollTs   = Date.now();
 
-    }catch(e){ /* ignore */ }
+      // Om vi ligger före serverns progress (kan ske efter resume), klipp ner direkt
+      if (shown > baseProgress) shown = baseProgress;
+
+    }catch(e){ /* nätverksglitch ignoreras */ }
   }
 
   /* ---------------- Recent ---------------- */
@@ -279,7 +257,7 @@
 
   /* start */
   pollNow(); pollRecent();
-  setInterval(pollNow, 1000);
+  setInterval(pollNow, 1000);   // 1 Hz: exakt synk & pausdetektion
   setInterval(pollRecent, 1000);
   cancelAnimationFrame(rafId);
   rafId = requestAnimationFrame(tick);
