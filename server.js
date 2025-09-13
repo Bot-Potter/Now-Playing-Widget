@@ -5,7 +5,6 @@ import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
-import tmi from "tmi.js";
 
 dotenv.config();
 
@@ -18,30 +17,29 @@ const {
   SPOTIFY_CLIENT_SECRET,
   SPOTIFY_REDIRECT_URI,
   PORT = process.env.PORT || 3000,
-  TWITCH_USERNAME,
-  TWITCH_OAUTH_TOKEN,
-  TWITCH_CHANNEL,
   ADMIN_SECRET
 } = process.env;
 
 /* ---------------- Helpers ---------------- */
 const TOKEN_FILE = path.join(process.cwd(), "refresh_token.json");
+const toMs = (iso) => new Date(iso).getTime() || 0;
 const noStore = (res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   res.set("Pragma", "no-cache");
 };
 
-/* ---------------- Server-side OAuth state (cookie-fritt) ---------------- */
+/* ---------------- Server-side OAuth state ---------------- */
 const pendingStates = new Map();           // state -> expiresAt (ms)
-const STATE_TTL_MS = 10 * 60 * 1000;       // 10 min
-const newState = () => crypto.randomBytes(16).toString("hex");
-const addState = (st) => pendingStates.set(st, Date.now() + STATE_TTL_MS);
-const consumeState = (st) => {
+const STATE_TTL_MS = 10 * 60 * 1000;
+
+function newState() { return crypto.randomBytes(16).toString("hex"); }
+function addState(st) { pendingStates.set(st, Date.now() + STATE_TTL_MS); }
+function consumeState(st) {
   const exp = pendingStates.get(st);
   if (!exp) return false;
   pendingStates.delete(st);
   return exp > Date.now();
-};
+}
 setInterval(() => {
   const now = Date.now();
   for (const [k, exp] of pendingStates.entries()) if (exp <= now) pendingStates.delete(k);
@@ -56,15 +54,13 @@ const loadRefresh = () => {
 };
 
 /* ---------------- Spotify OAuth ---------------- */
-app.get("/login", (_req, res) => {
+app.get("/login", (req, res) => {
   if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET || !SPOTIFY_REDIRECT_URI) {
     return res.status(500).send("Missing Spotify ENV vars");
   }
   const scopes = [
     "user-read-currently-playing",
     "user-read-playback-state",
-    // OBS: vi hämtar inte längre recently-played från Spotify – scope kvar för säkerhets skull
-    "user-read-recently-played"
   ].join(" ");
 
   const state = newState();
@@ -132,7 +128,9 @@ async function getAccessToken() {
   const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token });
 
   const r = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST", headers: { Authorization: auth, "Content-Type": "application/x-www-form-urlencoded" }, body
+    method: "POST",
+    headers: { Authorization: auth, "Content-Type": "application/x-www-form-urlencoded" },
+    body
   });
   if (!r.ok) return null;
   const data = await r.json();
@@ -140,203 +138,170 @@ async function getAccessToken() {
 }
 
 /* ==========================================================
-   STATE: snapshot + lokal recent byggd endast från now-playing
+   STATE: now + snapshot + local recent + 500ms "tick"
    ========================================================== */
+let lastNow = { playing: false };          // senaste "nu spelas" vi visar utåt
+let rawIsPlaying = false;                  // vad Spotify sa senaste fetch
+let lastFetchTs = 0;
 
-// snapshot för paus/overlay
-let lastTrackSnapshot = null;
-let lastTrackSeenAt = 0;
-const SNAPSHOT_TTL_MS = 2 * 60 * 1000;
+let lastTrackSnapshot = null;              // senaste aktiva track (för pausvy)
+let lastTrackSeenAt = 0;                   // när vi senast uppdaterade snapshot
+const SNAPSHOT_TTL_MS = 2 * 60 * 1000;     // snapshot giltighet
 
-// 2 Hz cache för now-playing
-const NOW_MIN_INTERVAL_MS = 500;
-let nowCache = { payload: { playing:false }, ts: 0 };
+// Lokal recent-historik: fylls endast när låt byts (via now playing)
+let localRecent = [];                      // newest-first, objekt: {id,title,artists,image,url,played_at}
+const LOCAL_RECENT_MAX = 50;
 
-// "Aktuell låt" och starttid (estimerad som now - progress)
-let currentNow = { playing: false, id: null, start_ts: null, payload: null };
-
-// Lokal historik (nyast först), fylls ENDAST när vi detekterar spårsbyte
-let localRecent = [];      // [{id,title,artists,image,url,played_at}]
-const HISTORY_MAX = 100;
-
-function pushToLocalRecent(entry){
-  if (!entry?.id) return;
-  localRecent.unshift(entry);
-  // valfri dedupe på id (behåll senaste förekomst)
-  const seen = new Set();
-  localRecent = localRecent.filter(it => {
-    if (seen.has(it.id)) return false;
-    seen.add(it.id); return true;
-  }).slice(0, HISTORY_MAX);
+/* Utilities */
+function simplifyTrack(json) {
+  const item = json?.item || {};
+  return {
+    playing: !!json?.is_playing,
+    type: "track",
+    id: item?.id || "",
+    title: item?.name || "",
+    artists: (item?.artists || []).map(a => a?.name).filter(Boolean),
+    album: item?.album?.name || "",
+    url: item?.external_urls?.spotify || "",
+    image: item?.album?.images?.[0]?.url || "",
+    progress_ms: json?.progress_ms ?? 0,
+    duration_ms: item?.duration_ms ?? 0
+  };
 }
 
-/* ---------------- /now-playing (med cache och lokal-recent) ---------------- */
-app.get("/now-playing", async (_req, res) => {
-  noStore(res);
-  try {
-    // 1) server-cache 500 ms
-    const age = Date.now() - nowCache.ts;
-    if (age < NOW_MIN_INTERVAL_MS) {
-      return res.json(nowCache.payload);
-    }
+function pushLocalRecentFrom(prevTrack) {
+  if (!prevTrack?.id) return;
+  const entry = {
+    id: prevTrack.id,
+    title: prevTrack.title || "",
+    artists: prevTrack.artists || [],
+    image: prevTrack.image || "",
+    url: prevTrack.url || "",
+    played_at: new Date().toISOString()
+  };
+  // undvik dubbletter i rad på samma id
+  if (localRecent[0]?.id === entry.id) return;
+  localRecent.unshift(entry);
+  if (localRecent.length > LOCAL_RECENT_MAX) localRecent.length = LOCAL_RECENT_MAX;
+}
 
+/* --------- Spotify fetch (ca 1 Hz) --------- */
+async function refreshFromSpotify() {
+  try {
     const at = await getAccessToken();
-    if (!at) {
-      const payload = { playing:false };
-      nowCache = { payload, ts: Date.now() };
-      return res.json(payload);
-    }
+    if (!at) { rawIsPlaying = false; return; }
 
     const r = await fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track", {
       headers: { Authorization: `Bearer ${at}` }
     });
+    lastFetchTs = Date.now();
 
     if (r.status === 204) {
-      const payload = { playing:false };
-      nowCache = { payload, ts: Date.now() };
-      return res.json(payload);
+      // inget spelas
+      rawIsPlaying = false;
+      lastNow = { playing:false };
+      return;
     }
     if (!r.ok) {
-      const payload = { playing:false };
-      nowCache = { payload, ts: Date.now() };
-      return res.json(payload);
+      rawIsPlaying = false;
+      lastNow = { playing:false };
+      return;
     }
 
     const json = await r.json();
-    if (!json?.is_playing) {
-      const payload = { playing:false };
-      nowCache = { payload, ts: Date.now() };
-      return res.json(payload);
+    const isPlaying = !!json?.is_playing;
+    rawIsPlaying = isPlaying;
+
+    if (!isPlaying) {
+      // Spelas inte → lastNow sätts till playing:false,
+      // men vi behåller snapshot separat (för pausvy) i endpoints.
+      lastNow = { playing:false };
+      return;
     }
 
-    const item = json.item || {};
-    const img = item.album?.images?.[0]?.url || "";
-    const payload = {
-      playing: true,
-      type: "track",
-      id: item.id || "",
-      title: item.name || "",
-      artists: (item.artists||[]).map(a => a.name),
-      album: item.album?.name || "",
-      url: item.external_urls?.spotify || "",
-      image: img,
-      progress_ms: json.progress_ms || 0,
-      duration_ms: item.duration_ms || 0
-    };
+    const payload = simplifyTrack(json);
 
-    // --- Lokal recentlogik: om spår-id byts, skjut in förra spåret i historiken ---
-    const nowTs = Date.now();
-    const estStartTs = nowTs - (payload.progress_ms || 0);
-
-    if (currentNow?.id && currentNow.id !== payload.id) {
-      // lägg in tidigare spår med dess starttid
-      pushToLocalRecent({
-        id: currentNow.payload.id,
-        title: currentNow.payload.title,
-        artists: currentNow.payload.artists,
-        image: currentNow.payload.image,
-        url: currentNow.payload.url,
-        played_at: new Date(currentNow.start_ts || nowTs).toISOString()
-      });
+    // Trackbyte? Skjut in föregående i localRecent
+    if (lastTrackSnapshot?.id && lastTrackSnapshot.id !== payload.id) {
+      pushLocalRecentFrom(lastTrackSnapshot);
     }
 
-    // uppdatera nuvarande spår
-    currentNow = { playing: true, id: payload.id, start_ts: estStartTs, payload };
+    // Uppdatera "lastNow" (serverns sanna nu-låt)
+    lastNow = payload;
 
-    // snapshot för pausvy/overlay
-    lastTrackSnapshot = payload;
+    // Uppdatera snapshot till senaste aktiva låt
+    lastTrackSnapshot = { ...payload };
     lastTrackSeenAt = Date.now();
 
-    nowCache = { payload, ts: Date.now() };
-    res.json(payload);
   } catch (e) {
-    const payload = { playing:false, error:e.message };
-    nowCache = { payload, ts: Date.now() };
-    res.json(payload);
+    // nätverksfel → gör inget; tick-loopen sköter progress om playing
   }
+}
+
+/* --------- 500ms tick för progress ---------
+   När rawIsPlaying = true (enligt senaste fetch), "tackar" vi upp progress_ms
+   lokalt mellan Spotify-förfrågningar för att klienten ska få 2 Hz uppdateringar.
+------------------------------------------------*/
+const TICK_MS = 500;
+setInterval(() => {
+  if (!rawIsPlaying) return;
+  if (!lastTrackSnapshot?.id) return;
+  // öka progress i snapshot
+  if (typeof lastTrackSnapshot.progress_ms === "number" && typeof lastTrackSnapshot.duration_ms === "number") {
+    const next = Math.min(
+      lastTrackSnapshot.duration_ms,
+      (lastTrackSnapshot.progress_ms || 0) + TICK_MS
+    );
+    lastTrackSnapshot.progress_ms = next;
+
+    // spegla även i lastNow om det är samma spår
+    if (lastNow?.id === lastTrackSnapshot.id) {
+      lastNow.progress_ms = next;
+    }
+  }
+}, TICK_MS);
+
+/* --------- Kör Spotify-fetch ca 1 Hz --------- */
+setInterval(refreshFromSpotify, 1000);
+
+/* ---------------- Endpoints ---------------- */
+
+// Stabil "nu spelas"
+app.get("/now-playing", (_req, res) => {
+  noStore(res);
+  if (lastNow?.playing && lastTrackSnapshot?.id === lastNow.id) {
+    // returnera upp-tickad version
+    return res.json({ ...lastNow });
+  }
+  // inte playing just nu
+  return res.json({ playing:false });
 });
 
-/* ---------------- /now-snapshot (fallback för paus) ---------------- */
+// Snapshot för pausvy
 app.get("/now-snapshot", (_req, res) => {
   noStore(res);
   const fresh = lastTrackSnapshot && (Date.now() - lastTrackSeenAt) < SNAPSHOT_TTL_MS;
-  if (fresh) return res.json({ ...lastTrackSnapshot, snapshot: true });
-  return res.json({ playing: false });
+  if (!fresh) return res.json({ playing:false });
+  // snapshot "spelas" = true så klienten kan visa kortet; progress fryser när servern inte tickar
+  return res.json({ ...lastTrackSnapshot, snapshot:true, playing:true });
 });
 
-/* ---------------- /recent (LOKAL – ej Spotify) ---------------- */
+// Recent från lokalt minne (endast byggt av track-byten)
 app.get("/recent", (req, res) => {
   noStore(res);
-  try {
-    const excludeId = (req.query.exclude_id || "").trim() || null;
+  const excludeId = (req.query.exclude_id || "").trim() || null;
 
-    // Basera listan enbart på localRecent (nyast först). currentNow exkluderas separat.
-    let list = localRecent;
-    if (excludeId) list = list.filter(x => x.id !== excludeId);
-
-    // Top 3 är lagom
-    const items = list.slice(0, 3);
-
-    res.json({ items });
-  } catch (e) {
-    res.json({ items: [], error: String(e) });
+  const out = [];
+  const seen = new Set();
+  for (const it of localRecent) {
+    if (excludeId && it.id === excludeId) continue;
+    if (seen.has(it.id)) continue; // unik per track-id
+    seen.add(it.id);
+    out.push(it);
+    if (out.length >= 3) break;
   }
+  res.json({ items: out });
 });
-
-/* ---------------- Extra debug (frivilligt) ---------------- */
-app.get("/recent-debug", (_req, res) => {
-  noStore(res);
-  res.json({
-    now: { id: currentNow.id, playing: currentNow.playing, start_ts: currentNow.start_ts ? new Date(currentNow.start_ts).toISOString() : null },
-    history_count: localRecent.length,
-    top5: localRecent.slice(0,5)
-  });
-});
-
-/* ---------------- SSE för overlay ---------------- */
-const sseClients = new Set();
-app.get("/events", (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Connection", "keep-alive");
-  res.flushHeaders?.();
-  res.write(`: connected\n\n`);
-  sseClients.add(res);
-  const keep = setInterval(() => {
-    if (res.writableEnded) return clearInterval(keep);
-    res.write(`: ping ${Date.now()}\n\n`);
-  }, 15000);
-  req.on("close", () => { clearInterval(keep); sseClients.delete(res); });
-});
-function broadcastSSE(type, payload) {
-  const data = `event: ${type}\n` + `data: ${JSON.stringify(payload)}\n\n`;
-  for (const client of sseClients) {
-    if (!client.writableEnded) client.write(data);
-  }
-}
-
-/* ---------------- Twitch listener (tmi.js) ---------------- */
-if (TWITCH_USERNAME && TWITCH_OAUTH_TOKEN && TWITCH_CHANNEL) {
-  const tmiClient = new tmi.Client({
-    identity: { username: TWITCH_USERNAME, password: TWITCH_OAUTH_TOKEN },
-    channels: [ TWITCH_CHANNEL ]
-  });
-  tmiClient.connect().then(() =>
-    console.log(`[tmi] Connected to #${TWITCH_CHANNEL}`)
-  ).catch(err => console.error("[tmi] connect error", err));
-
-  const SONG_CMD = /^(?:!song|!låt)\b/i;
-  tmiClient.on("message", (_channel, userstate, message, self) => {
-    if (self) return;
-    if (SONG_CMD.test(message)) {
-      const by = userstate["display-name"] || userstate.username || "someone";
-      broadcastSSE("song", { by, at: Date.now() });
-      console.log(`[tmi] !song by ${by}`);
-    }
-  });
-} else {
-  console.warn("[tmi] Twitch vars missing, skipping chat listener");
-}
 
 /* ---------------- Admin & Debug ---------------- */
 app.get("/env-check", (_req, res) => {
