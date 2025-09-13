@@ -6,7 +6,7 @@
 <title>Nu spelas</title>
 <style>
   :root{
-    --accent:#c84cff;                  /* ersätts dynamiskt via albumfärg */
+    --accent:#f0f0f0; /* Standard offwhite */
     --text:#f6e9f5; --muted:#e9d3f2;
     --bar-bg:rgba(255,255,255,.16);
     --radius:18px;
@@ -19,13 +19,11 @@
   }
   .wrap{width:min(760px,94vw)}
 
-  /* KORTET */
   .card{
     position:relative;width:100%;
     padding:18px 22px 20px;border-radius:var(--radius);
     overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);isolation:isolate;
-    cursor:pointer;
-    text-decoration:none;color:inherit;display:block;
+    cursor:pointer;text-decoration:none;color:inherit;display:block;
   }
   .bg{position:absolute;inset:0;background-size:cover;background-position:center;
       filter:blur(26px) saturate(130%) brightness(70%);transform:scale(1.12);z-index:-2}
@@ -49,7 +47,6 @@
 
   .empty{text-align:center;padding:28px 22px;color:#e0cade;opacity:.85}
 
-  /* SENASTE 3 */
   .recent{
     margin-top:14px;
     display:grid;
@@ -77,12 +74,11 @@
 </head>
 <body>
   <div class="wrap">
-    <!-- Hela kortet är klickbart -->
     <a id="cardLink" class="card" aria-live="polite" target="_blank" rel="noopener">
-      <div id="bg" class="bg"></div>
+      <div id="bg" class="bg" style="background-image:url('https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314')"></div>
 
       <div id="content" class="row" hidden>
-        <div class="cover"><img id="cover" alt="Omslag"></div>
+        <div class="cover"><img id="cover" alt="Omslag" src="https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314"></div>
         <div class="meta">
           <h1 id="title" class="title">–</h1>
           <div id="artist" class="artist">–</div>
@@ -94,13 +90,14 @@
       <div id="empty" class="empty">Ingen låt spelas just nu.</div>
     </a>
 
-    <!-- Senaste 3 -->
     <div id="recent" class="recent" aria-label="Senaste låtar"></div>
   </div>
 
 <script>
   const API_NOW = "/now-playing";
   const API_REC = "/recent";
+  const PLACEHOLDER_IMG = "https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314";
+  const DEFAULT_ACCENT = "#f0f0f0";
 
   const el = {
     cardLink:document.getElementById("cardLink"),
@@ -126,22 +123,24 @@
           if(data[i+3]<128) continue;
           r+=data[i];g+=data[i+1];b+=data[i+2];count++;
         }
-        if(!count) return resolve("#c84cff");
+        if(!count) return resolve(DEFAULT_ACCENT);
         r=Math.round(r/count);g=Math.round(g/count);b=Math.round(b/count);
         resolve(`rgb(${r},${g},${b})`);
       };
-      img.onerror=()=>resolve("#c84cff");
+      img.onerror=()=>resolve(DEFAULT_ACCENT);
       img.src=url;
     });
   }
   const setAccent=(c)=>document.documentElement.style.setProperty("--accent",c);
 
-  /* ------- NOW: exakt en uppdatering per sekund (ingen extrapolering) ------- */
   let nowId = null;
 
   function paintNow(d){
     if(!d||!d.playing){
-      el.content.hidden=true; el.empty.hidden=false; el.bg.style.backgroundImage="";
+      el.content.hidden=true; el.empty.hidden=false;
+      el.bg.style.backgroundImage=`url("${PLACEHOLDER_IMG}")`;
+      el.cover.src=PLACEHOLDER_IMG;
+      setAccent(DEFAULT_ACCENT);
       el.cardLink.href="#";
       el.tStart.textContent="0:00"; el.tEnd.textContent="0:00"; el.bar.style.width="0%";
       return;
@@ -155,19 +154,15 @@
     el.tStart.textContent=ms(p); el.tEnd.textContent=ms(t);
     el.bar.style.width=(100*p/Math.max(1,t))+"%";
 
-    if (d.image){
-      // Bara uppdatera bild/akcent när låten byts, undvik onödig färgflash varje sekund
-      if (d.id !== nowId) {
-        el.cover.src=d.image;
-        el.bg.style.backgroundImage=`url("${d.image}")`;
-        dominantColorFromURL(d.image).then(setAccent);
-      }
+    if (d.id !== nowId && d.image){
+      el.cover.src=d.image;
+      el.bg.style.backgroundImage=`url("${d.image}")`;
+      dominantColorFromURL(d.image).then(setAccent);
     }
     el.cardLink.href = d.url || "#";
     nowId = d.id || null;
   }
 
-  /* ------- Recent: enkel & robust render varje sekund ------- */
   function renderRecent(list){
     el.recent.innerHTML="";
     const three = (Array.isArray(list)?list:[]).slice(0,3);
@@ -175,7 +170,7 @@
       const a=document.createElement("a");
       a.className="chip"; a.href=it.url||"#"; a.target="_blank"; a.rel="noopener";
       a.innerHTML=`
-        <img src="${it.image||""}" alt="">
+        <img src="${it.image||PLACEHOLDER_IMG}" alt="">
         <div class="text">
           <div class="t">${it.title||""}</div>
           <div class="a">${(it.artists||[]).join(", ")}</div>
@@ -183,7 +178,6 @@
       `;
       el.recent.appendChild(a);
     }
-    // Fyll ut till exakt 3 kolumner för att hålla layouten
     for(let k=three.length;k<3;k++){
       const ph=document.createElement("div"); ph.className="chip"; ph.style.visibility="hidden";
       el.recent.appendChild(ph);
@@ -207,7 +201,6 @@
     }catch{}
   }
 
-  // Starta: tick exakt en gång per sekund
   pollNow(); pollRecent();
   setInterval(pollNow,1000);
   setInterval(pollRecent,1000);
