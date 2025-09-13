@@ -6,7 +6,7 @@
 <title>Nu spelas</title>
 <style>
   :root{
-    --accent:#f0f0f0; /* Standard offwhite (används bara när inget spelas) */
+    --accent:#f0f0f0; /* Standard offwhite (används bara när inget spelas & ingen snapshot) */
     --text:#f6e9f5; --muted:#e9d3f2;
     --bar-bg:rgba(255,255,255,.16);
     --radius:18px;
@@ -24,8 +24,7 @@
     position:relative;width:100%;
     padding:18px 22px 20px;border-radius:var(--radius);
     overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);isolation:isolate;
-    cursor:pointer;
-    text-decoration:none;color:inherit;display:block;
+    cursor:pointer;text-decoration:none;color:inherit;display:block;
   }
   .bg{position:absolute;inset:0;background-size:cover;background-position:center;
       filter:blur(26px) saturate(130%) brightness(70%);transform:scale(1.12);z-index:-2}
@@ -102,7 +101,9 @@
 
 <script>
   const API_NOW = "/now-playing";
+  const API_SNAPSHOT = "/now-snapshot";
   const API_REC = "/recent";
+
   const PLACEHOLDER_IMG = "https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314";
   const DEFAULT_ACCENT = "#f0f0f0";
 
@@ -140,64 +141,78 @@
     });
   }
 
-  /* Tillstånd som minns senaste låtens visuella data – används vid paus */
-  let nowId = null;
+  /* Minnet för bild+accent så vi kan behålla dem i paus */
+  let currentTrackId = null;
   let lastImage = PLACEHOLDER_IMG;
   let lastAccent = DEFAULT_ACCENT;
 
-  function applyArtworkAndAccent(imgUrl){
-    el.cover.src = imgUrl || PLACEHOLDER_IMG;
-    el.bg.style.backgroundImage = `url("${imgUrl || PLACEHOLDER_IMG}")`;
-    if (imgUrl) dominantColorFromURL(imgUrl).then(c => {
-      lastAccent = c; setAccent(c);
-    });
+  function applyArtwork(imgUrl){
+    lastImage = imgUrl || PLACEHOLDER_IMG;
+    el.cover.src = lastImage;
+    el.bg.style.backgroundImage = `url("${lastImage}")`;
+    if (imgUrl) {
+      dominantColorFromURL(imgUrl).then(c => { lastAccent=c; setAccent(c); });
+    } else {
+      lastAccent = DEFAULT_ACCENT; setAccent(DEFAULT_ACCENT);
+    }
   }
 
-  function paintNow(d){
-    // Heuristik: "paus" om playing=false men vi har giltiga tidsvärden/track-id
-    const isPaused = !!(d && d.playing === false && d.id && (d.progress_ms ?? null) !== null);
+  function showEmpty(){
+    el.content.hidden=true; el.empty.hidden=false;
+    currentTrackId = null;
+    setAccent(DEFAULT_ACCENT);
+    el.bg.style.backgroundImage=`url("${PLACEHOLDER_IMG}")`;
+    el.cover.src=PLACEHOLDER_IMG;
+    el.cardLink.href="#";
+    el.tStart.textContent="0:00"; el.tEnd.textContent="0:00"; el.bar.style.width="0%";
+  }
 
-    if(!d || (!d.playing && !isPaused)){
-      // INGET SPELAS: visa tomvy + återställ placeholder & offwhite
-      el.content.hidden=true; el.empty.hidden=false;
-      setAccent(DEFAULT_ACCENT);
-      el.bg.style.backgroundImage=`url("${PLACEHOLDER_IMG}")`;
-      el.cover.src=PLACEHOLDER_IMG;
-      el.cardLink.href="#";
-      el.tStart.textContent="0:00"; el.tEnd.textContent="0:00"; el.bar.style.width="0%";
-      nowId = null;
-      return;
-    }
-
-    // SPELAR ELLER PAUSAD: visa kortet
+  function showCardBase(d){
     el.content.hidden=false; el.empty.hidden=true;
-
     el.title.textContent=d.title||"Okänd låt";
     el.artist.textContent=(d.artists||[]).join(", ")||d.album||"";
+    el.cardLink.href = d.url || "#";
     const p=d.progress_ms||0,t=d.duration_ms||1;
     el.tStart.textContent=ms(p); el.tEnd.textContent=ms(t);
     el.bar.style.width=(100*p/Math.max(1,t))+"%";
-    el.cardLink.href = d.url || "#";
+  }
 
-    if (d.id !== nowId) {
-      // Ny låt → byt bild + accent
-      if (d.image){
-        lastImage = d.image;
-        applyArtworkAndAccent(d.image);
-      } else {
-        lastImage = PLACEHOLDER_IMG;
-        setAccent(DEFAULT_ACCENT);
-        el.cover.src=PLACEHOLDER_IMG;
-        el.bg.style.backgroundImage=`url("${PLACEHOLDER_IMG}")`;
+  async function fetchJSON(url){
+    const r = await fetch(url, { cache: "no-store", headers: { "pragma":"no-cache","cache-control":"no-cache" }});
+    return r.ok ? r.json() : null;
+  }
+
+  async function pollNow(){
+    try{
+      const now = await fetchJSON(API_NOW);
+      if (now && now.playing) {
+        // Ny låt? uppdatera bild + accent en gång
+        if (now.id !== currentTrackId && now.image){
+          applyArtwork(now.image);
+          currentTrackId = now.id || null;
+        }
+        showCardBase(now);
+        return;
       }
-      nowId = d.id || null;
-    } else {
-      // Samma låt: om paus → behåll senast kända bild/accent (gör inget)
-      // Om spelar → inget att ändra här (progress/texter redan satta)
+      // Inte playing – kolla snapshot (paus)
+      const snap = await fetchJSON(API_SNAPSHOT);
+      if (snap && snap.playing && snap.id) {
+        // Visa pausad låt: behåll tidigare artwork/accent (eller sätt från snap)
+        if (snap.id !== currentTrackId) {
+          if (snap.image) applyArtwork(snap.image); else applyArtwork(null);
+          currentTrackId = snap.id;
+        }
+        showCardBase(snap); // progress från server → fryser
+        return;
+      }
+      // Varken now eller snapshot
+      showEmpty();
+    }catch{
+      // Vid nätverksfel – gör inget drastiskt; behåll senaste vy
     }
   }
 
-  /* ------- Recent: enkel & robust render varje sekund ------- */
+  /* ------- Recent (enkel varje sekund) ------- */
   function renderRecent(list){
     el.recent.innerHTML="";
     const three = (Array.isArray(list)?list:[]).slice(0,3);
@@ -219,27 +234,29 @@
     }
   }
 
-  async function pollNow(){
+  async function pollRecent(){
     try{
-      const r=await fetch("/now-playing",{cache:"no-store"});
-      const d=await r.json();
-      paintNow(d);
+      const exclude = currentTrackId ? `?exclude_id=${encodeURIComponent(currentTrackId)}` : "";
+      const data = await fetchJSON(API_REC + exclude);
+      renderRecent(data?.items || []);
     }catch{}
   }
 
-  async function pollRecent(){
-    try{
-      const exclude = nowId ? `?exclude_id=${encodeURIComponent(nowId)}` : "";
-      const r=await fetch("/recent"+exclude,{cache:"no-store"});
-      const data=await r.json();
-      renderRecent(data.items||[]);
-    }catch{}
+  /* Stabil 1 Hz poller utan drift */
+  function startPoller(fn, periodMs=1000){
+    let next = performance.now();
+    async function step(){
+      try{ await fn(); }catch{}
+      next += periodMs;
+      const delay = Math.max(0, next - performance.now());
+      setTimeout(step, delay);
+    }
+    setTimeout(step, 0);
   }
 
   // Start
-  pollNow(); pollRecent();
-  setInterval(pollNow,1000);
-  setInterval(pollRecent,1000);
+  startPoller(pollNow, 1000);
+  startPoller(pollRecent, 1000);
 </script>
 </body>
 </html>
