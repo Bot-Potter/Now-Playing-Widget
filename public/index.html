@@ -86,7 +86,7 @@
 <script>
   const API_NOW = "/now-playing";
   const API_SNAPSHOT = "/now-snapshot";
-  const API_REC = "/recent";
+  const API_REC = "/recent"; // <- nu byggs detta lokalt på servern, inte via Spotify
 
   const PLACEHOLDER_IMG = "https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314";
   const DEFAULT_ACCENT = "#f0f0f0";
@@ -229,7 +229,7 @@
     setTimeout(step, 0);
   }
 
-  // 2 Hz för now-playing, 1 Hz för recent
+  // 2 Hz för now-playing, 1 Hz för recent (räcker gott)
   startPoller(pollNow, 500);
   startPoller(pollRecent, 1000);
 </script>
