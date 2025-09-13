@@ -6,7 +6,7 @@
 <title>Nu spelas</title>
 <style>
   :root{
-    --accent:#0e1111; /* Standard offwhite (används bara när inget spelas & ingen snapshot) */
+    --accent:#f0f0f0; /* Offwhite som endast används när ingen låt ska visas alls */
     --text:#f6e9f5; --muted:#e9d3f2;
     --bar-bg:rgba(255,255,255,.16);
     --radius:18px;
@@ -33,8 +33,7 @@
 
   .row{display:flex;align-items:center;gap:18px}
   .cover{width:110px;height:110px;flex:0 0 auto;border-radius:50%;padding:5px;
-    background:radial-gradient(closest-side, color-mix(in oklab, var(--accent) 40%, transparent), transparent 68%), var(--accent);
-    position:relative}
+    background:radial-gradient(closest-side, color-mix(in oklab, var(--accent) 40%, transparent), transparent 68%), var(--accent)}
   .cover img{width:100%;height:100%;display:block;border-radius:50%;object-fit:cover;border:4px solid rgba(255,255,255,.12)}
 
   .meta{flex:1;min-width:0}
@@ -106,6 +105,7 @@
 
   const PLACEHOLDER_IMG = "https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314";
   const DEFAULT_ACCENT = "#f0f0f0";
+  const PAUSE_HOLD_MS = 15000; // hur länge vi håller kortet i paus om snapshot saknas
 
   const el = {
     cardLink:document.getElementById("cardLink"),
@@ -120,8 +120,7 @@
 
   async function dominantColorFromURL(url){
     return new Promise((resolve)=>{
-      const img = new Image();
-      img.crossOrigin = "anonymous";
+      const img = new Image(); img.crossOrigin = "anonymous";
       img.onload = () => {
         const w=50,h=50; const c=document.createElement("canvas"); c.width=w;c.height=h;
         const ctx=c.getContext("2d",{willReadFrequently:true});
@@ -141,40 +140,45 @@
     });
   }
 
-  /* Minnet för bild+accent så vi kan behålla dem i paus */
-  let currentTrackId = null;
-  let lastImage = PLACEHOLDER_IMG;
-  let lastAccent = DEFAULT_ACCENT;
+  /* === Client-side track state (för paus/hold) === */
+  let trackId = null;
+  let duration = 1;
+  let lastProgressMs = 0;     // senast kända progress från server
+  let lastSeenTs = 0;         // när vi senast fick data för denna låt
+  let artworkUrl = PLACEHOLDER_IMG;
+  let accentColor = DEFAULT_ACCENT;
 
-  function applyArtwork(imgUrl){
-    lastImage = imgUrl || PLACEHOLDER_IMG;
-    el.cover.src = lastImage;
-    el.bg.style.backgroundImage = `url("${lastImage}")`;
-    if (imgUrl) {
-      dominantColorFromURL(imgUrl).then(c => { lastAccent=c; setAccent(c); });
+  function applyArtwork(url){
+    artworkUrl = url || PLACEHOLDER_IMG;
+    el.cover.src = artworkUrl;
+    el.bg.style.backgroundImage = `url("${artworkUrl}")`;
+    if (url) {
+      dominantColorFromURL(url).then(c => { accentColor = c; setAccent(c); });
     } else {
-      lastAccent = DEFAULT_ACCENT; setAccent(DEFAULT_ACCENT);
+      accentColor = DEFAULT_ACCENT; setAccent(DEFAULT_ACCENT);
     }
   }
 
   function showEmpty(){
     el.content.hidden=true; el.empty.hidden=false;
-    currentTrackId = null;
+    // återställ endast när vi verkligen är tomma
     setAccent(DEFAULT_ACCENT);
     el.bg.style.backgroundImage=`url("${PLACEHOLDER_IMG}")`;
     el.cover.src=PLACEHOLDER_IMG;
     el.cardLink.href="#";
     el.tStart.textContent="0:00"; el.tEnd.textContent="0:00"; el.bar.style.width="0%";
+    // nolla trackId så att nästa riktiga låt triggar artwork-uppdatering
+    trackId = null; duration = 1; lastProgressMs = 0; lastSeenTs = 0;
   }
 
-  function showCardBase(d){
+  function showCardBase(title, artists, url, progress, dur){
     el.content.hidden=false; el.empty.hidden=true;
-    el.title.textContent=d.title||"Okänd låt";
-    el.artist.textContent=(d.artists||[]).join(", ")||d.album||"";
-    el.cardLink.href = d.url || "#";
-    const p=d.progress_ms||0,t=d.duration_ms||1;
-    el.tStart.textContent=ms(p); el.tEnd.textContent=ms(t);
-    el.bar.style.width=(100*p/Math.max(1,t))+"%";
+    el.title.textContent = title || "Okänd låt";
+    el.artist.textContent = (artists||[]).join(", ");
+    el.cardLink.href = url || "#";
+    el.tStart.textContent = ms(progress);
+    el.tEnd.textContent = ms(dur);
+    el.bar.style.width = (100 * progress / Math.max(1, dur)) + "%";
   }
 
   async function fetchJSON(url){
@@ -186,29 +190,50 @@
     try{
       const now = await fetchJSON(API_NOW);
       if (now && now.playing) {
-        // Ny låt? uppdatera bild + accent en gång
-        if (now.id !== currentTrackId && now.image){
-          applyArtwork(now.image);
-          currentTrackId = now.id || null;
+        // uppdatera state från now
+        if (now.id !== trackId) {
+          if (now.image) applyArtwork(now.image); else applyArtwork(null);
         }
-        showCardBase(now);
+        trackId = now.id || null;
+        duration = Math.max(1, now.duration_ms || 1);
+        lastProgressMs = Math.max(0, now.progress_ms || 0);
+        lastSeenTs = Date.now();
+
+        showCardBase(now.title, now.artists, now.url, lastProgressMs, duration);
         return;
       }
-      // Inte playing – kolla snapshot (paus)
+
+      // playing=false -> försök snapshot
       const snap = await fetchJSON(API_SNAPSHOT);
       if (snap && snap.playing && snap.id) {
-        // Visa pausad låt: behåll tidigare artwork/accent (eller sätt från snap)
-        if (snap.id !== currentTrackId) {
+        // snapshot innehåller senaste spelade info (ofta vid paus)
+        if (snap.id !== trackId) {
           if (snap.image) applyArtwork(snap.image); else applyArtwork(null);
-          currentTrackId = snap.id;
         }
-        showCardBase(snap); // progress från server → fryser
+        trackId = snap.id;
+        duration = Math.max(1, snap.duration_ms || 1);
+
+        // använd senast kända progress: max(lastProgressMs, snap.progress_ms)
+        const snapProg = Math.max(0, snap.progress_ms || 0);
+        lastProgressMs = Math.max(lastProgressMs, snapProg);
+        // uppdatera lastSeen så vi inte tappar hold direkt
+        lastSeenTs = Date.now();
+
+        showCardBase(snap.title, snap.artists, snap.url, lastProgressMs, duration);
         return;
       }
-      // Varken now eller snapshot
+
+      // Ingen now/snapshot: om vi nyligen hade en låt -> håll pausvy (behåll bild/färg/tid)
+      if (trackId && Date.now() - lastSeenTs < PAUSE_HOLD_MS) {
+        showCardBase(el.title.textContent, el.artist.textContent.split(", "), el.cardLink.href, lastProgressMs, duration);
+        // behåll artwork + accent från tidigare (gör inget mer)
+        return;
+      }
+
+      // Helt tomt
       showEmpty();
     }catch{
-      // Vid nätverksfel – gör inget drastiskt; behåll senaste vy
+      // nätverksfel -> behåll senaste vy
     }
   }
 
@@ -236,7 +261,7 @@
 
   async function pollRecent(){
     try{
-      const exclude = currentTrackId ? `?exclude_id=${encodeURIComponent(currentTrackId)}` : "";
+      const exclude = trackId ? `?exclude_id=${encodeURIComponent(trackId)}` : "";
       const data = await fetchJSON(API_REC + exclude);
       renderRecent(data?.items || []);
     }catch{}
@@ -248,8 +273,7 @@
     async function step(){
       try{ await fn(); }catch{}
       next += periodMs;
-      const delay = Math.max(0, next - performance.now());
-      setTimeout(step, delay);
+      setTimeout(step, Math.max(0, next - performance.now()));
     }
     setTimeout(step, 0);
   }
