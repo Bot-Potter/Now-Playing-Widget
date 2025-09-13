@@ -56,13 +56,14 @@ const loadRefresh = () => {
 };
 
 /* ---------------- Spotify OAuth ---------------- */
-app.get("/login", (req, res) => {
+app.get("/login", (_req, res) => {
   if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET || !SPOTIFY_REDIRECT_URI) {
     return res.status(500).send("Missing Spotify ENV vars");
   }
   const scopes = [
     "user-read-currently-playing",
     "user-read-playback-state",
+    // OBS: vi hämtar inte längre recently-played från Spotify – scope kvar för säkerhets skull
     "user-read-recently-played"
   ].join(" ");
 
@@ -139,21 +140,41 @@ async function getAccessToken() {
 }
 
 /* ==========================================================
-   STATE: snapshot för paus/overlay
+   STATE: snapshot + lokal recent byggd endast från now-playing
    ========================================================== */
-let lastNow = { playing: false };
-let lastTrackSnapshot = null; // senaste playing:true payload
+
+// snapshot för paus/overlay
+let lastTrackSnapshot = null;
 let lastTrackSeenAt = 0;
 const SNAPSHOT_TTL_MS = 2 * 60 * 1000;
 
-/* ---------------- /now-playing (med 500ms cache för 2Hz) ---------------- */
-const NOW_MIN_INTERVAL_MS = 500; // 2 ggr/s
+// 2 Hz cache för now-playing
+const NOW_MIN_INTERVAL_MS = 500;
 let nowCache = { payload: { playing:false }, ts: 0 };
 
+// "Aktuell låt" och starttid (estimerad som now - progress)
+let currentNow = { playing: false, id: null, start_ts: null, payload: null };
+
+// Lokal historik (nyast först), fylls ENDAST när vi detekterar spårsbyte
+let localRecent = [];      // [{id,title,artists,image,url,played_at}]
+const HISTORY_MAX = 100;
+
+function pushToLocalRecent(entry){
+  if (!entry?.id) return;
+  localRecent.unshift(entry);
+  // valfri dedupe på id (behåll senaste förekomst)
+  const seen = new Set();
+  localRecent = localRecent.filter(it => {
+    if (seen.has(it.id)) return false;
+    seen.add(it.id); return true;
+  }).slice(0, HISTORY_MAX);
+}
+
+/* ---------------- /now-playing (med cache och lokal-recent) ---------------- */
 app.get("/now-playing", async (_req, res) => {
   noStore(res);
   try {
-    // Server-cache: om färskare än 500 ms -> svara direkt
+    // 1) server-cache 500 ms
     const age = Date.now() - nowCache.ts;
     if (age < NOW_MIN_INTERVAL_MS) {
       return res.json(nowCache.payload);
@@ -161,9 +182,9 @@ app.get("/now-playing", async (_req, res) => {
 
     const at = await getAccessToken();
     if (!at) {
-      lastNow = { playing:false };
-      nowCache = { payload: { playing:false }, ts: Date.now() };
-      return res.json({ playing:false });
+      const payload = { playing:false };
+      nowCache = { payload, ts: Date.now() };
+      return res.json(payload);
     }
 
     const r = await fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track", {
@@ -171,21 +192,21 @@ app.get("/now-playing", async (_req, res) => {
     });
 
     if (r.status === 204) {
-      lastNow = { playing:false };
-      nowCache = { payload: { playing:false }, ts: Date.now() };
-      return res.json({ playing:false });
+      const payload = { playing:false };
+      nowCache = { payload, ts: Date.now() };
+      return res.json(payload);
     }
     if (!r.ok) {
-      lastNow = { playing:false };
-      nowCache = { payload: { playing:false }, ts: Date.now() };
-      return res.json({ playing:false });
+      const payload = { playing:false };
+      nowCache = { payload, ts: Date.now() };
+      return res.json(payload);
     }
 
     const json = await r.json();
     if (!json?.is_playing) {
-      lastNow = { playing:false };
-      nowCache = { payload: { playing:false }, ts: Date.now() };
-      return res.json({ playing:false });
+      const payload = { playing:false };
+      nowCache = { payload, ts: Date.now() };
+      return res.json(payload);
     }
 
     const item = json.item || {};
@@ -203,17 +224,35 @@ app.get("/now-playing", async (_req, res) => {
       duration_ms: item.duration_ms || 0
     };
 
-    // snapshot för paus/overlay
+    // --- Lokal recentlogik: om spår-id byts, skjut in förra spåret i historiken ---
+    const nowTs = Date.now();
+    const estStartTs = nowTs - (payload.progress_ms || 0);
+
+    if (currentNow?.id && currentNow.id !== payload.id) {
+      // lägg in tidigare spår med dess starttid
+      pushToLocalRecent({
+        id: currentNow.payload.id,
+        title: currentNow.payload.title,
+        artists: currentNow.payload.artists,
+        image: currentNow.payload.image,
+        url: currentNow.payload.url,
+        played_at: new Date(currentNow.start_ts || nowTs).toISOString()
+      });
+    }
+
+    // uppdatera nuvarande spår
+    currentNow = { playing: true, id: payload.id, start_ts: estStartTs, payload };
+
+    // snapshot för pausvy/overlay
     lastTrackSnapshot = payload;
     lastTrackSeenAt = Date.now();
-    lastNow = payload;
 
     nowCache = { payload, ts: Date.now() };
     res.json(payload);
   } catch (e) {
-    lastNow = { playing:false };
-    nowCache = { payload: { playing:false, error:e.message }, ts: Date.now() };
-    res.json({ playing:false, error:e.message });
+    const payload = { playing:false, error:e.message };
+    nowCache = { payload, ts: Date.now() };
+    res.json(payload);
   }
 });
 
@@ -225,62 +264,36 @@ app.get("/now-snapshot", (_req, res) => {
   return res.json({ playing: false });
 });
 
-/* ---------------- /recent (direkt från Spotify, lätt cache) ---------------- */
-let recentCache = { items: [], ts: 0 };
-const RECENT_MIN_MS = 1500; // snällare mot API
-
-app.get("/recent", async (req, res) => {
+/* ---------------- /recent (LOKAL – ej Spotify) ---------------- */
+app.get("/recent", (req, res) => {
   noStore(res);
   try {
-    const now = Date.now();
-    if (now - recentCache.ts >= RECENT_MIN_MS) {
-      const at = await getAccessToken();
-      if (at) {
-        const url = new URL("https://api.spotify.com/v1/me/player/recently-played");
-        url.searchParams.set("limit", "50");
-        const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${at}` } });
-        if (r.ok) {
-          const j = await r.json();
-          const items = (j.items || [])
-            .filter(it => it?.track?.id && it?.played_at)
-            .map(it => ({
-              id: it.track.id,
-              title: it.track.name || "",
-              artists: (it.track.artists || []).map(a => a.name),
-              image: it.track.album?.images?.[0]?.url || "",
-              url: it.track.external_urls?.spotify || "",
-              played_at: it.played_at
-            }))
-            .sort((a,b) => new Date(b.played_at) - new Date(a.played_at));
-          recentCache = { items, ts: now };
-        } else {
-          // behåll gammal cache
-        }
-      }
-    }
-
     const excludeId = (req.query.exclude_id || "").trim() || null;
-    const list = excludeId
-      ? recentCache.items.filter(x => x.id !== excludeId)
-      : recentCache.items;
 
-    // topp 3 unika på track-id
-    const out = [];
-    const seen = new Set();
-    for (const it of list) {
-      if (seen.has(it.id)) continue;
-      seen.add(it.id);
-      out.push(it);
-      if (out.length >= 3) break;
-    }
+    // Basera listan enbart på localRecent (nyast först). currentNow exkluderas separat.
+    let list = localRecent;
+    if (excludeId) list = list.filter(x => x.id !== excludeId);
 
-    res.json({ items: out });
+    // Top 3 är lagom
+    const items = list.slice(0, 3);
+
+    res.json({ items });
   } catch (e) {
     res.json({ items: [], error: String(e) });
   }
 });
 
-/* ---------------- SSE för overlay (oförändrat) ---------------- */
+/* ---------------- Extra debug (frivilligt) ---------------- */
+app.get("/recent-debug", (_req, res) => {
+  noStore(res);
+  res.json({
+    now: { id: currentNow.id, playing: currentNow.playing, start_ts: currentNow.start_ts ? new Date(currentNow.start_ts).toISOString() : null },
+    history_count: localRecent.length,
+    top5: localRecent.slice(0,5)
+  });
+});
+
+/* ---------------- SSE för overlay ---------------- */
 const sseClients = new Set();
 app.get("/events", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
