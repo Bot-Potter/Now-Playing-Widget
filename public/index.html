@@ -123,10 +123,10 @@
   }
 
   function showEmpty(){
+    // Visa tomtext, men rör inte bild/accent
     el.content.hidden=true; el.empty.hidden=false;
     el.cardLink.href="#";
     el.tStart.textContent="0:00"; el.tEnd.textContent="0:00"; el.bar.style.width="0%";
-    // rör inte bg/cover/accent
   }
 
   function showCardBase(d){
@@ -137,6 +137,22 @@
     const p=d.progress_ms||0,t=d.duration_ms||1;
     el.tStart.textContent=ms(p); el.tEnd.textContent=ms(t);
     el.bar.style.width=(100*p/Math.max(1,t))+"%";
+  }
+
+  // Ny: showPaused – använd när snapshot säger paused
+  function showPaused(){
+    // Precis som showEmpty, men vi behåller artwork/accent (inget ändras här)
+    el.content.hidden = true;
+    el.empty.hidden = true;   // Vi vill visa "Ingen låt spelas just nu" texten:
+    // OBS: Din copy säger att empty-texten ska visas vid paus.
+    // Sätt hidden = false:
+    el.empty.hidden = false;
+
+    el.cardLink.href = "#";
+    // progress/tider nollas visuellt (val: lämna kvar? jag nollar)
+    el.tStart.textContent = "0:00";
+    el.tEnd.textContent = "0:00";
+    el.bar.style.width = "0%";
   }
 
   async function fetchJSON(url){
@@ -153,11 +169,17 @@
         return;
       }
       const snap = await fetchJSON(API_SNAPSHOT);
-      if (snap && snap.playing && snap.id) {
-        if (snap.id !== currentTrackId) { applyArtwork(snap.image || null); currentTrackId = snap.id; }
-        showCardBase(snap);
+      // Servern skickar nu playing:false, paused:true när paus
+      if (snap && snap.snapshot && snap.paused) {
+        // Säkra att artworken är rätt första gången (om ny paus från annan låt)
+        if (snap.id && snap.id !== currentTrackId) {
+          applyArtwork(snap.image || null);
+          currentTrackId = snap.id;
+        }
+        showPaused();
         return;
       }
+      // Inget alls
       showEmpty();
     }catch{}
   }
@@ -191,7 +213,7 @@
     }catch{}
   }
 
-  /* Stabil 2 Hz poller (500 ms) */
+  // 2 Hz
   function startPoller(fn, periodMs=500){
     let next = performance.now();
     async function step(){
