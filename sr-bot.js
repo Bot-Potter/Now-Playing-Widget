@@ -190,7 +190,7 @@ let helixTokenState = {
 };
 
 const HAVE_REFRESH = !!(process.env.TWITCH_CLIENT_ID && process.env.TWITCH_CLIENT_SECRET && helixTokenState.refreshToken);
-const REFUND_ENABLED = !!(process.env.TWITCH_CLIENT_ID && helixTokenState.accessToken);
+
 
 if (!REFUND_ENABLED) {
   console.warn("[sr-bot] Refund/Fulfil DISABLED (saknar TWITCH_CLIENT_ID eller TWITCH_REDEMPTIONS_TOKEN).");
