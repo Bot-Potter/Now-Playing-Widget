@@ -64,9 +64,10 @@ app.get("/login", (req, res) => {
     return res.status(500).send("Missing Spotify ENV vars");
   }
   const scopes = [
-    "user-read-currently-playing",
-    "user-read-playback-state",
-  ].join(" ");
+  "user-read-currently-playing",
+  "user-read-playback-state",
+  "user-modify-playback-state"
+].join(" ");
 
   const state = newState();
   addState(state);
