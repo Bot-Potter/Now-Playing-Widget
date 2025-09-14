@@ -7,10 +7,10 @@
 <style>
   :root{
     --scale: 1;
-    --pos-x: 50%;               
-    --pos-y: 50%;               
+    --pos-x: 50%;               /* används när side = top/bottom */
+    --pos-y: 50%;               /* används när side = left/right  */
 
-    --offset: 55px;             
+    --offset: 55px;             /* generisk kantmarginal */
     --max-width: 780px;
     --radius: 18px;
     --cover: 86px;
@@ -21,17 +21,17 @@
     --glass-border: rgba(255,255,255,.15);
     --bar-bg: rgba(255,255,255,.2);
 
-    /* Default = TOP */
-    --tray-left: var(--pos-x);
-    --tray-right: auto;
-    --tray-top: var(--offset);
-    --tray-bottom: auto;
+    /* Positioneringsvariabler (sätts från JS) */
+    --tray-left:auto;
+    --tray-right:auto;
+    --tray-top:auto;
+    --tray-bottom:var(--offset);
 
-    /* Start/slut-transform för top → down */
+    /* Start/slut-transform för in-/utglidningen (sätts från JS) */
     --tx0:-50%;
-    --ty0:-140%;
+    --ty0:140%;
     --tx1:-50%;
-    --ty1:var(--offset);
+    --ty1:calc(-1 * var(--offset));
   }
 
   *{box-sizing:border-box}
@@ -117,6 +117,21 @@
 </div>
 
 <script>
+  /* ===== URL-parametrar =====
+     Placering & slide:
+       ?side=bottom|top|left|right   (default: bottom)
+       ?pos=left|center|right        (för top/bottom)
+           eller top|center|bottom   (för left/right)
+       ?offset=55                    (px, %, etc)  — fallback till ?y=55 för bakåtkompat.
+       ?scale=1.0
+       ?w=780                        (maxbredd)
+       ?h=86                         (coverhöjd)
+       ?blur=0|1                     (default 1)
+     Timing:
+       ?dur=10     (sek visningstid)
+       ?tick=250   (ms lokaltik)
+       ?sync=1000  (ms resync mot server)
+  */
   const q = new URLSearchParams(location.search);
 
   const setCSS = (k,v)=>document.documentElement.style.setProperty(k, v);
@@ -129,16 +144,20 @@
     else if (!Number.isNaN(num)) setCSS(name, num + fallbackUnit);
   };
 
+  // ---- Läs in basparametrar ----
   if(q.get("scale")) setCSS("--scale", q.get("scale"));
   if(q.get("w")) setLengthVar("--max-width", q.get("w"));
   if(q.get("h")) setLengthVar("--cover", q.get("h"));
 
+  // offset: stöd för nya ?offset samt gamla ?y
   const offsetParam = q.get("offset") ?? q.get("y") ?? "55";
   setLengthVar("--offset", offsetParam);
 
-  const side = (q.get("side") || "top").toLowerCase(); // <-- DEFAULT TOP
+  // ---- Sides & positioner ----
+  const side = (q.get("side") || "bottom").toLowerCase();
   const pos  = (q.get("pos")  || "center").toLowerCase();
 
+  // Helper för pos längs X/Y:
   const posMapX = { left:"0%", center:"50%", right:"100%" };
   const posMapY = { top:"0%", center:"50%", bottom:"100%" };
 
@@ -176,24 +195,28 @@
   }
 
   if (side === "left" || side === "right") {
+    // vertikal referenspunkt
     setCSS("--pos-y", posMapY[pos] ?? "50%");
   } else {
+    // horisontell referenspunkt
     setCSS("--pos-x", posMapX[pos] ?? "50%");
   }
 
   switch(side){
-    case "bottom": placeBottom(); break;
+    case "top": placeTop(); break;
     case "left": placeLeft(); break;
     case "right": placeRight(); break;
-    default: placeTop(); break; // top är default
+    default: placeBottom(); break; // bottom
   }
 
+  // ---- Blur, DOM refs ----
   const useBlur = q.get("blur") !== "0";
   const $=id=>document.getElementById(id);
   const el={ tray:$("tray"), card:$("card"), bg:$("bg"), cover:$("cover"),
              title:$("title"), artist:$("artist"), tStart:$("tStart"), tEnd:$("tEnd"), bar:$("bar"), by:$("by") };
   if(!useBlur) el.card.classList.add("no-blur");
 
+  // ---- Tider ----
   const DUR_MS  = Math.max(1000, (parseFloat(q.get("dur"))||10)*1000);
   const TICK_MS = Math.max(100, parseInt(q.get("tick")||"250",10));
   const SYNC_MS = Math.max(1000, parseInt(q.get("sync")||"1000",10));
@@ -312,6 +335,7 @@
     handleTrigger(by);
   });
 
+  // Manuell test: tryck "s"
   addEventListener("keydown",(e)=>{ if(e.key.toLowerCase()==="s") handleTrigger("debug"); });
 </script>
 </body>
