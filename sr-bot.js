@@ -149,11 +149,32 @@ async function spotifyAddToQueue(trackUri) {
   const at = await getSpotifyAccessToken();
   const u = new URL("https://api.spotify.com/v1/me/player/queue");
   u.searchParams.set("uri", trackUri);
-  const r = await fetch(u.toString(), { method: "POST", headers: { Authorization: `Bearer ${at}` }});
+
+  const r = await fetch(u.toString(), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${at}` }
+  });
+
+  // Läs alltid response som text (kan vara tomt)
+  const txt = await r.text().catch(() => "");
+
+  // Spotify-standard för success
   if (r.status === 204) return;
+
+  // Vissa miljöer svarar 200 + tom body -> behandla som OK
+  if (r.status === 200 && (!txt || txt.trim() === "")) return;
+
+  // Vanliga fel
   if (r.status === 404) throw new Error("no_active_device");
-  const txt = await r.text();
-  throw new Error(`queue_failed:${r.status}:${txt.slice(0,120)}`);
+
+  // Försök extrahera vettigt felmeddelande
+  let msg = txt;
+  try {
+    const j = JSON.parse(txt);
+    msg = j?.error?.message || j?.message || txt || "unknown";
+  } catch (_) {}
+
+  throw new Error(`queue_failed:${r.status}:${String(msg).slice(0,120)}`);
 }
 
 /* ==============================
