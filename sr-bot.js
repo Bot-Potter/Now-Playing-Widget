@@ -177,9 +177,176 @@ async function spotifyAddToQueue(trackUri) {
   throw new Error(`queue_failed:${r.status}:${String(msg).slice(0,120)}`);
 }
 
-/* ==============================
-   Helix (refund/fulfil)
+/* /* ==============================
+   Helix (refund/fulfil) – AUTO REFRESH
    ============================== */
+let BROADCASTER_ID = (process.env.TWITCH_BROADCASTER_ID || null);
+
+// Håller aktuell Helix-token i minnet + utgångstid (för förnyelse)
+let helixTokenState = {
+  accessToken: process.env.TWITCH_REDEMPTIONS_TOKEN || null,
+  refreshToken: process.env.TWITCH_REDEMPTIONS_REFRESH_TOKEN || null,
+  expiresAt: 0 // ms epoch; 0 => okänt
+};
+
+const HAVE_REFRESH = !!(process.env.TWITCH_CLIENT_ID && process.env.TWITCH_CLIENT_SECRET && helixTokenState.refreshToken);
+const REFUND_ENABLED = !!(process.env.TWITCH_CLIENT_ID && helixTokenState.accessToken);
+
+if (!REFUND_ENABLED) {
+  console.warn("[sr-bot] Refund/Fulfil DISABLED (saknar TWITCH_CLIENT_ID eller TWITCH_REDEMPTIONS_TOKEN).");
+} else if (!HAVE_REFRESH) {
+  console.warn("[sr-bot] Auto-refresh DISABLED (saknar TWITCH_CLIENT_SECRET eller TWITCH_REDEMPTIONS_REFRESH_TOKEN). Token måste uppdateras manuellt när den går ut.");
+} else {
+  console.log("[sr-bot] Refund/Fulfil ENABLED + auto-refresh.");
+}
+
+async function refreshHelixToken(reason = "scheduled") {
+  if (!HAVE_REFRESH) return false;
+  try {
+    const body = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: helixTokenState.refreshToken,
+      client_id: process.env.TWITCH_CLIENT_ID,
+      client_secret: process.env.TWITCH_CLIENT_SECRET
+    });
+    const r = await fetch("https://id.twitch.tv/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body
+    });
+    const j = await r.json();
+    if (!r.ok) {
+      console.error(`[sr-bot] Helix refresh failed (${reason}):`, j);
+      return false;
+    }
+    helixTokenState.accessToken = j.access_token || helixTokenState.accessToken;
+    if (j.refresh_token) helixTokenState.refreshToken = j.refresh_token; // Twitch kan rotera refresh-token
+    const expiresIn = Number(j.expires_in || 0);
+    helixTokenState.expiresAt = expiresIn ? Date.now() + (expiresIn * 1000) : 0;
+    console.log(`[sr-bot] Helix token refreshed (${reason}). Expires in ~${expiresIn}s`);
+    return true;
+  } catch (e) {
+    console.error("[sr-bot] Helix refresh exception:", e);
+    return false;
+  }
+}
+
+function helixHeaders() {
+  if (!REFUND_ENABLED) throw new Error("refund_not_configured");
+  if (!helixTokenState.accessToken) throw new Error("no_helix_access_token");
+  return {
+    "Client-ID": process.env.TWITCH_CLIENT_ID,
+    "Authorization": `Bearer ${helixTokenState.accessToken}`,
+    "Content-Type": "application/json"
+  };
+}
+
+function helixTokenNearingExpiry() {
+  if (!helixTokenState.expiresAt) return false; // okänt -> kör på
+  const bufferMs = 5 * 60 * 1000; // förnya 5 min innan utgång
+  return Date.now() >= (helixTokenState.expiresAt - bufferMs);
+}
+
+// Wrapper som auto-refreshar på förhand eller vid 401 och retry:ar en gång
+async function helixFetch(url, init, attempt = 0) {
+  if (HAVE_REFRESH && helixTokenNearingExpiry()) {
+    await refreshHelixToken("preemptive");
+  }
+  let r = await fetch(url, { ...(init||{}), headers: { ...(init?.headers||{}), ...helixHeaders() } });
+  if (r.status === 401 && HAVE_REFRESH && attempt === 0) {
+    const ok = await refreshHelixToken("on-401");
+    if (ok) {
+      r = await fetch(url, { ...(init||{}), headers: { ...(init?.headers||{}), ...helixHeaders() } });
+    }
+  }
+  return r;
+}
+
+async function ensureBroadcasterId() {
+  if (BROADCASTER_ID) return BROADCASTER_ID;
+  if (!REFUND_ENABLED) return null;
+  const r = await helixFetch("https://api.twitch.tv/helix/users");
+  const j = await r.json();
+  const id = j?.data?.[0]?.id;
+  if (!id) throw new Error("cant_resolve_broadcaster_id");
+  BROADCASTER_ID = id;
+  return id;
+}
+
+async function listUnfulfilledRedemptions({ rewardId, after = null, first = 50 }) {
+  await ensureBroadcasterId();
+  const u = new URL("https://api.twitch.tv/helix/channel_points/custom_rewards/redemptions");
+  u.searchParams.set("broadcaster_id", BROADCASTER_ID);
+  u.searchParams.set("status", "UNFULFILLED");
+  u.searchParams.set("sort", "OLDEST");
+  u.searchParams.set("first", String(Math.min(50, Math.max(1, first))));
+  if (rewardId) u.searchParams.set("reward_id", rewardId);
+  if (after) u.searchParams.set("after", after);
+
+  const r = await helixFetch(u.toString());
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`list_redemptions_failed:${r.status}:${t.slice(0,120)}`);
+  }
+  return r.json();
+}
+
+async function updateRedemptionStatus(rewardId, redemptionId, status) {
+  await ensureBroadcasterId();
+  const u = new URL("https://api.twitch.tv/helix/channel_points/custom_rewards/redemptions");
+  u.searchParams.set("broadcaster_id", BROADCASTER_ID);
+  u.searchParams.set("reward_id", rewardId);
+  u.searchParams.set("id", redemptionId);
+
+  const r = await helixFetch(u.toString(), {
+    method: "PATCH",
+    body: JSON.stringify({ status })
+  });
+
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`update_redemption_failed:${r.status}:${t.slice(0,120)}`);
+  }
+  return r.json();
+}
+
+async function refundOldestForUser(userLogin) {
+  if (!REFUND_ENABLED || !process.env.TWITCH_SONG_REWARD_ID) return false;
+
+  let cursor = null;
+  while (true) {
+    const j = await listUnfulfilledRedemptions({ rewardId: process.env.TWITCH_SONG_REWARD_ID, after: cursor, first: 50 });
+    const arr = j?.data || [];
+    const hit = arr.find(x => x?.user_login?.toLowerCase() === userLogin.toLowerCase());
+    if (hit) {
+      await updateRedemptionStatus(process.env.TWITCH_SONG_REWARD_ID, hit.id, "CANCELED");
+      return true;
+    }
+    const next = j?.pagination?.cursor;
+    if (!next || arr.length === 0) break;
+    cursor = next;
+  }
+  return false;
+}
+
+async function fulfilOldestForUser(userLogin) {
+  if (!REFUND_ENABLED || !process.env.TWITCH_SONG_REWARD_ID) return false;
+
+  let cursor = null;
+  while (true) {
+    const j = await listUnfulfilledRedemptions({ rewardId: process.env.TWITCH_SONG_REWARD_ID, after: cursor, first: 50 });
+    const arr = j?.data || [];
+    const hit = arr.find(x => x?.user_login?.toLowerCase() === userLogin.toLowerCase());
+    if (hit) {
+      await updateRedemptionStatus(process.env.TWITCH_SONG_REWARD_ID, hit.id, "FULFILLED");
+      return true;
+    }
+    const next = j?.pagination?.cursor;
+    if (!next || arr.length === 0) break;
+    cursor = next;
+  }
+  return false;
+}
 let BROADCASTER_ID = TWITCH_BROADCASTER_ID || null;
 
 function helixHeaders() {
