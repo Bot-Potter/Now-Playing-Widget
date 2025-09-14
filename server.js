@@ -23,7 +23,8 @@ const {
   // Twitch
   TWITCH_USERNAME,
   TWITCH_OAUTH_TOKEN,      // format: "oauth:xxxxxxxxxxxxxxxxxxxx"
-  TWITCH_CHANNEL           // t.ex. "maccanzz" (lowercase)
+  TWITCH_CHANNEL,          // t.ex. "maccanzz" (lowercase)
+  TWITCH_REPLY_ON_COMMAND  // NY: "true"/"false" – om boten ska svara i chatten på !song/!låt
 } = process.env;
 
 /* ---------------- Helpers ---------------- */
@@ -308,11 +309,34 @@ if (TWITCH_USERNAME && TWITCH_OAUTH_TOKEN && TWITCH_CHANNEL) {
   const SONG_CMD = /^(?:!song|!låt)\b/i;
   tmiClient.on("message", (_channel, userstate, message, self) => {
     if (self) return;
-    if (SONG_CMD.test(message)) {
-      const by = userstate["display-name"] || userstate.username || "someone";
-      broadcastSSE("song", { by, at: Date.now() });
-      console.log(`[tmi] !song by ${by}`);
+    if (!SONG_CMD.test(message)) return;
+
+    const display = userstate["display-name"] || userstate.username || "someone";
+    const mention = `@${display}`;
+    // Trigga overlay via SSE oavsett om vi svarar i chatten
+    broadcastSSE("song", { by: display, at: Date.now() });
+    console.log(`[tmi] !song by ${display}`);
+
+    // Ska vi svara i chatten? Styrs av TWITCH_REPLY_ON_COMMAND
+    const shouldReply = String(TWITCH_REPLY_ON_COMMAND || "true").toLowerCase() === "true";
+    if (!shouldReply) return;
+
+    // Bygg svarstext
+    let reply = `${mention} Spelas inget just nu.`;
+    if (lastNow?.playing && lastNow?.id) {
+      const title = lastNow.title || "Okänd låt";
+      const artists = (lastNow.artists || []).join(", ") || "Okänd artist";
+      const url = lastNow.url ? ` ${lastNow.url}` : "";
+      reply = `${mention} 🎵 ${title} — ${artists}${url}`;
+    } else if (lastTrackSnapshot?.id) { // pausad
+      const title = lastTrackSnapshot.title || "Okänd låt";
+      const artists = (lastTrackSnapshot.artists || []).join(", ") || "Okänd artist";
+      const url = lastTrackSnapshot.url ? ` ${lastTrackSnapshot.url}` : "";
+      reply = `${mention} ⏸️ ${title} — ${artists}${url}`;
     }
+
+    try { tmiClient.say(TWITCH_CHANNEL, reply); }
+    catch (e) { console.warn("[tmi] say error:", e?.message); }
   });
 } else {
   console.warn("[tmi] Twitch vars missing, skipping chat listener");
