@@ -307,13 +307,40 @@ if (TWITCH_USERNAME && TWITCH_OAUTH_TOKEN && TWITCH_CHANNEL) {
 
   const SONG_CMD = /^(?:!song|!låt)\b/i;
   tmiClient.on("message", (_channel, userstate, message, self) => {
-    if (self) return;
-    if (SONG_CMD.test(message)) {
-      const by = userstate["display-name"] || userstate.username || "someone";
-      broadcastSSE("song", { by, at: Date.now() });
-      console.log(`[tmi] !song by ${by}`);
+  if (self) return;
+  if (SONG_CMD.test(message)) {
+    const by = userstate["display-name"] || userstate.username || "someone";
+    const tag = "@" + (userstate.username || by).replace(/\s+/g, ""); // säkert tag
+
+    broadcastSSE("song", { by, at: Date.now() });
+    console.log(`[tmi] !song by ${by}`);
+
+    // Kolla ENV innan vi svarar i chatten
+    if (process.env.TWITCH_REPLY_ON_COMMAND === "true") {
+      try {
+        let reply = "";
+        if (lastNow?.playing && lastNow?.title) {
+          const artists = (lastNow.artists || []).join(", ");
+          const url = lastNow.url ? ` ${lastNow.url}` : "";
+          reply = `${tag} Spelas nu: ${lastNow.title} – ${artists}.${url}`;
+        } else {
+          const fresh = lastTrackSnapshot && (Date.now() - lastTrackSeenAt) < SNAPSHOT_TTL_MS;
+          if (fresh && lastTrackSnapshot.title) {
+            const artists = (lastTrackSnapshot.artists || []).join(", ");
+            const url = lastTrackSnapshot.url ? ` ${lastTrackSnapshot.url}` : "";
+            reply = `${tag} Pausat/nyss spelat: ${lastTrackSnapshot.title} – ${artists}.${url}`;
+          } else {
+            reply = `${tag} Ingen låt spelas just nu.`;
+          }
+        }
+        tmiClient.say(_channel, reply).catch(() => {});
+      } catch {
+        // svälj fel så vi inte krossar chat-listenern
+      }
     }
-  });
+  }
+});
+
 } else {
   console.warn("[tmi] Twitch vars missing, skipping chat listener");
 }
