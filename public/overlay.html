@@ -7,52 +7,32 @@
 <style>
   :root{
     --scale: 1;
-    --pos-x: 50%;               /* används när side = top/bottom */
-    --pos-y: 50%;               /* används när side = left/right  */
-
-    --offset: 55px;             /* generisk kantmarginal */
-    --max-width: 780px;
+    --pos-x: 50%;              
+    --offset-bottom: 55px;     /* default nu = 55px */
+    --max-width: 780px;        
     --radius: 18px;
-    --cover: 86px;
+    --cover: 86px;             
 
-    --accent:#c84cff;
+    --accent:#c84cff;          
     --text:#fff; --muted:#e7d9ef;
     --glass: rgba(14,10,18,.85);
     --glass-border: rgba(255,255,255,.15);
     --bar-bg: rgba(255,255,255,.2);
-
-    /* Positioneringsvariabler (sätts från JS) */
-    --tray-left:auto;
-    --tray-right:auto;
-    --tray-top:auto;
-    --tray-bottom:var(--offset);
-
-    /* Start/slut-transform för in-/utglidningen (sätts från JS) */
-    --tx0:-50%;
-    --ty0:140%;
-    --tx1:-50%;
-    --ty1:calc(-1 * var(--offset));
   }
 
   *{box-sizing:border-box}
   html,body{height:100%}
-  body{
-    margin:0; background:transparent; overflow:hidden;
-    font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:var(--text);
-  }
+  body{ margin:0; background:transparent; overflow:hidden;
+        font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:var(--text); }
 
   .tray{
-    position:fixed;
-    left:var(--tray-left); right:var(--tray-right);
-    top:var(--tray-top); bottom:var(--tray-bottom);
-
-    transform:translate(var(--tx0), var(--ty0)) scale(var(--scale));
+    position:fixed; left:var(--pos-x); bottom:0;
+    transform:translate(-50%, 140%) scale(var(--scale));
     transition:transform 520ms cubic-bezier(.2,.9,.2,1);
-    width:min(var(--max-width), 94vw);
-    pointer-events:none;
+    width:min(var(--max-width), 94vw); pointer-events:none;
     filter: drop-shadow(0 18px 40px rgba(0,0,0,.55));
   }
-  .tray.show{ transform:translate(var(--tx1), var(--ty1)) scale(var(--scale)); }
+  .tray.show{ transform:translate(-50%, calc(-1 * var(--offset-bottom))) scale(var(--scale)); }
 
   .card{
     position:relative; isolation:isolate;
@@ -118,110 +98,50 @@
 
 <script>
   /* ===== URL-parametrar =====
-     Placering & slide:
-       ?side=bottom|top|left|right   (default: bottom)
-       ?pos=left|center|right        (för top/bottom)
-           eller top|center|bottom   (för left/right)
-       ?offset=55                    (px, %, etc)  — fallback till ?y=55 för bakåtkompat.
-       ?scale=1.0
-       ?w=780                        (maxbredd)
-       ?h=86                         (coverhöjd)
-       ?blur=0|1                     (default 1)
-     Timing:
-       ?dur=10     (sek visningstid)
-       ?tick=250   (ms lokaltik)
-       ?sync=1000  (ms resync mot server)
+     ?pos=left|center|right
+     ?scale=1.0
+     ?y=55                  (px, default 55)
+     ?w=780                 (maxbredd, default 780px)
+     ?h=86                  (coverhöjd, default 86px)
+     ?blur=0|1              (0 = av, 1 = på; default = 1)
+     ?dur=10                (sekunder visningstid, default 10)
+     ?tick=250              (ms lokaltik)
+     ?sync=1000             (ms resync mot server)
   */
   const q = new URLSearchParams(location.search);
 
-  const setCSS = (k,v)=>document.documentElement.style.setProperty(k, v);
   const setLengthVar = (name, val, fallbackUnit = "px") => {
     if (!val) return;
     val = String(val).trim();
     const isLen = /^-?\d*\.?\d+(px|%|vw|vh|rem|em)$/i.test(val);
     const num   = parseFloat(val);
-    if (isLen) setCSS(name, val);
-    else if (!Number.isNaN(num)) setCSS(name, num + fallbackUnit);
+    if (isLen) {
+      document.documentElement.style.setProperty(name, val);
+    } else if (!Number.isNaN(num)) {
+      document.documentElement.style.setProperty(name, num + fallbackUnit);
+    }
   };
 
-  // ---- Läs in basparametrar ----
-  if(q.get("scale")) setCSS("--scale", q.get("scale"));
+  const pos=(q.get("pos")||"center").toLowerCase();
+  document.documentElement.style.setProperty("--pos-x", pos==="left"?"0%":pos==="right"?"100%":"50%");
+  if(q.get("scale")) document.documentElement.style.setProperty("--scale", q.get("scale"));
+  setLengthVar("--offset-bottom", q.get("y") || "55");
   if(q.get("w")) setLengthVar("--max-width", q.get("w"));
   if(q.get("h")) setLengthVar("--cover", q.get("h"));
 
-  // offset: stöd för nya ?offset samt gamla ?y
-  const offsetParam = q.get("offset") ?? q.get("y") ?? "55";
-  setLengthVar("--offset", offsetParam);
-
-  // ---- Sides & positioner ----
-  const side = (q.get("side") || "bottom").toLowerCase();
-  const pos  = (q.get("pos")  || "center").toLowerCase();
-
-  // Helper för pos längs X/Y:
-  const posMapX = { left:"0%", center:"50%", right:"100%" };
-  const posMapY = { top:"0%", center:"50%", bottom:"100%" };
-
-  function placeBottom(){
-    setCSS("--tray-left", "var(--pos-x)");
-    setCSS("--tray-right", "auto");
-    setCSS("--tray-top", "auto");
-    setCSS("--tray-bottom", "var(--offset)");
-    setCSS("--tx0", "-50%");       setCSS("--ty0", "140%");
-    setCSS("--tx1", "-50%");       setCSS("--ty1", "calc(-1 * var(--offset))");
-  }
-  function placeTop(){
-    setCSS("--tray-left", "var(--pos-x)");
-    setCSS("--tray-right", "auto");
-    setCSS("--tray-top", "var(--offset)");
-    setCSS("--tray-bottom", "auto");
-    setCSS("--tx0", "-50%");       setCSS("--ty0", "-140%");
-    setCSS("--tx1", "-50%");       setCSS("--ty1", "var(--offset)");
-  }
-  function placeLeft(){
-    setCSS("--tray-left", "var(--offset)");
-    setCSS("--tray-right", "auto");
-    setCSS("--tray-top", "var(--pos-y)");
-    setCSS("--tray-bottom", "auto");
-    setCSS("--tx0", "-140%");      setCSS("--ty0", "-50%");
-    setCSS("--tx1", "var(--offset)"); setCSS("--ty1", "-50%");
-  }
-  function placeRight(){
-    setCSS("--tray-left", "auto");
-    setCSS("--tray-right", "var(--offset)");
-    setCSS("--tray-top", "var(--pos-y)");
-    setCSS("--tray-bottom", "auto");
-    setCSS("--tx0", "140%");       setCSS("--ty0", "-50%");
-    setCSS("--tx1", "calc(-1 * var(--offset))"); setCSS("--ty1", "-50%");
-  }
-
-  if (side === "left" || side === "right") {
-    // vertikal referenspunkt
-    setCSS("--pos-y", posMapY[pos] ?? "50%");
-  } else {
-    // horisontell referenspunkt
-    setCSS("--pos-x", posMapX[pos] ?? "50%");
-  }
-
-  switch(side){
-    case "top": placeTop(); break;
-    case "left": placeLeft(); break;
-    case "right": placeRight(); break;
-    default: placeBottom(); break; // bottom
-  }
-
-  // ---- Blur, DOM refs ----
+  // blur default = 1
   const useBlur = q.get("blur") !== "0";
   const $=id=>document.getElementById(id);
   const el={ tray:$("tray"), card:$("card"), bg:$("bg"), cover:$("cover"),
              title:$("title"), artist:$("artist"), tStart:$("tStart"), tEnd:$("tEnd"), bar:$("bar"), by:$("by") };
   if(!useBlur) el.card.classList.add("no-blur");
 
-  // ---- Tider ----
   const DUR_MS  = Math.max(1000, (parseFloat(q.get("dur"))||10)*1000);
   const TICK_MS = Math.max(100, parseInt(q.get("tick")||"250",10));
   const SYNC_MS = Math.max(1000, parseInt(q.get("sync")||"1000",10));
 
   const API_NOW="/now-playing", API_SNAP="/now-snapshot";
+
   const ms=x=>{ x=Math.max(0, x|0); const s=Math.floor(x/1000), m=Math.floor(s/60); return `${m}:${String(s%60).padStart(2,"0")}`; };
 
   async function dominantColorFromURL(url){
@@ -236,7 +156,7 @@
       }; img.onerror=()=>resolve("#c84cff"); img.src=url;
     });
   }
-  const setAccent=c=>setCSS("--accent", c);
+  const setAccent=c=>document.documentElement.style.setProperty("--accent", c);
 
   function paintStatic(d, who){
     el.title.textContent = d.title || "Okänd låt";
@@ -305,18 +225,10 @@
 
   async function fetchNowWithRetry(max=5, delay=250){
     for(let i=0;i<max;i++){
-      try{
-        const r=await fetch(API_NOW,{cache:"no-store"});
-        const j=await r.json();
-        if(j&&j.playing) return j;
-      }catch{}
+      try{ const r=await fetch(API_NOW,{cache:"no-store"}); const j=await r.json(); if(j&&j.playing) return j; }catch{}
       await new Promise(r=>setTimeout(r,delay));
     }
-    try{
-      const s=await fetch(API_SNAP,{cache:"no-store"});
-      const j=await s.json();
-      if(j&&j.playing) return j;
-    }catch{}
+    try{ const s=await fetch(API_SNAP,{cache:"no-store"}); const j=await s.json(); if(j&&j.playing) return j; }catch{}
     return {playing:false};
   }
 
@@ -335,7 +247,6 @@
     handleTrigger(by);
   });
 
-  // Manuell test: tryck "s"
   addEventListener("keydown",(e)=>{ if(e.key.toLowerCase()==="s") handleTrigger("debug"); });
 </script>
 </body>
