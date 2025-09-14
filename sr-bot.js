@@ -50,18 +50,18 @@ const {
   SR_APPROVE_ALL_DELAY_MS = "600",
   SR_PENDING_TTL_MS = "900000", // 15 min default
 
-  // Refund/fulfil via Helix (valfritt men krävs för att återbetala/markera)
-  TWITCH_REDEMPTIONS_TOKEN,    // user access token (broadcaster) med scope: channel:manage:redemptions
-  TWITCH_CLIENT_ID,            // din app client id
-  TWITCH_BROADCASTER_ID        // valfritt; annars auto-lookup via token
+  // Helix / kanalpoäng refund/fulfil (broadcaster)
+  TWITCH_CLIENT_ID,
+  TWITCH_CLIENT_SECRET,
+  TWITCH_BROADCASTER_ID,
+  TWITCH_REDEMPTIONS_TOKEN,        // access token för broadcaster (channel:manage:redemptions)
+  TWITCH_REDEMPTIONS_REFRESH_TOKEN // refresh token för broadcaster (valfritt men rekommenderat)
 } = process.env;
 
 const REPLY = String(TWITCH_REPLY_ENABLED).toLowerCase() === "true";
 const MAX_PENDING = Math.max(1, parseInt(SR_MAX_PENDING, 10) || 50);
 const APPROVE_ALL_DELAY_MS = Math.max(0, parseInt(SR_APPROVE_ALL_DELAY_MS, 10) || 600);
 const PENDING_TTL_MS = Math.max(60_000, parseInt(SR_PENDING_TTL_MS, 10) || 900_000);
-
-const REFUND_ENABLED = !!(TWITCH_REDEMPTIONS_TOKEN && TWITCH_CLIENT_ID);
 
 /* ==============================
    Helpers
@@ -177,23 +177,24 @@ async function spotifyAddToQueue(trackUri) {
   throw new Error(`queue_failed:${r.status}:${String(msg).slice(0,120)}`);
 }
 
-/* /* ==============================
+/* ==============================
    Helix (refund/fulfil) – AUTO REFRESH
    ============================== */
-let BROADCASTER_ID = (process.env.TWITCH_BROADCASTER_ID || null);
+let BROADCASTER_ID = (TWITCH_BROADCASTER_ID || null);
 
 // Håller aktuell Helix-token i minnet + utgångstid (för förnyelse)
 let helixTokenState = {
-  accessToken: process.env.TWITCH_REDEMPTIONS_TOKEN || null,
-  refreshToken: process.env.TWITCH_REDEMPTIONS_REFRESH_TOKEN || null,
+  accessToken: TWITCH_REDEMPTIONS_TOKEN || null,
+  refreshToken: TWITCH_REDEMPTIONS_REFRESH_TOKEN || null,
   expiresAt: 0 // ms epoch; 0 => okänt
 };
 
-const HAVE_REFRESH = !!(process.env.TWITCH_CLIENT_ID && process.env.TWITCH_CLIENT_SECRET && helixTokenState.refreshToken);
-
+const HAVE_REFRESH = !!(TWITCH_CLIENT_ID && TWITCH_CLIENT_SECRET && helixTokenState.refreshToken);
+// Refund anses aktiverad om vi åtminstone har Client-ID och antingen en access token NU eller en refresh token som kan hämta en.
+const REFUND_ENABLED = !!(TWITCH_CLIENT_ID && (helixTokenState.accessToken || helixTokenState.refreshToken));
 
 if (!REFUND_ENABLED) {
-  console.warn("[sr-bot] Refund/Fulfil DISABLED (saknar TWITCH_CLIENT_ID eller TWITCH_REDEMPTIONS_TOKEN).");
+  console.warn("[sr-bot] Refund/Fulfil DISABLED (saknar TWITCH_CLIENT_ID eller TWITCH_REDEMPTIONS_TOKEN/TWITCH_REDEMPTIONS_REFRESH_TOKEN).");
 } else if (!HAVE_REFRESH) {
   console.warn("[sr-bot] Auto-refresh DISABLED (saknar TWITCH_CLIENT_SECRET eller TWITCH_REDEMPTIONS_REFRESH_TOKEN). Token måste uppdateras manuellt när den går ut.");
 } else {
@@ -206,8 +207,8 @@ async function refreshHelixToken(reason = "scheduled") {
     const body = new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: helixTokenState.refreshToken,
-      client_id: process.env.TWITCH_CLIENT_ID,
-      client_secret: process.env.TWITCH_CLIENT_SECRET
+      client_id: TWITCH_CLIENT_ID,
+      client_secret: TWITCH_CLIENT_SECRET
     });
     const r = await fetch("https://id.twitch.tv/oauth2/token", {
       method: "POST",
@@ -235,7 +236,7 @@ function helixHeaders() {
   if (!REFUND_ENABLED) throw new Error("refund_not_configured");
   if (!helixTokenState.accessToken) throw new Error("no_helix_access_token");
   return {
-    "Client-ID": process.env.TWITCH_CLIENT_ID,
+    "Client-ID": TWITCH_CLIENT_ID,
     "Authorization": `Bearer ${helixTokenState.accessToken}`,
     "Content-Type": "application/json"
   };
@@ -300,103 +301,6 @@ async function updateRedemptionStatus(rewardId, redemptionId, status) {
 
   const r = await helixFetch(u.toString(), {
     method: "PATCH",
-    body: JSON.stringify({ status })
-  });
-
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`update_redemption_failed:${r.status}:${t.slice(0,120)}`);
-  }
-  return r.json();
-}
-
-async function refundOldestForUser(userLogin) {
-  if (!REFUND_ENABLED || !process.env.TWITCH_SONG_REWARD_ID) return false;
-
-  let cursor = null;
-  while (true) {
-    const j = await listUnfulfilledRedemptions({ rewardId: process.env.TWITCH_SONG_REWARD_ID, after: cursor, first: 50 });
-    const arr = j?.data || [];
-    const hit = arr.find(x => x?.user_login?.toLowerCase() === userLogin.toLowerCase());
-    if (hit) {
-      await updateRedemptionStatus(process.env.TWITCH_SONG_REWARD_ID, hit.id, "CANCELED");
-      return true;
-    }
-    const next = j?.pagination?.cursor;
-    if (!next || arr.length === 0) break;
-    cursor = next;
-  }
-  return false;
-}
-
-async function fulfilOldestForUser(userLogin) {
-  if (!REFUND_ENABLED || !process.env.TWITCH_SONG_REWARD_ID) return false;
-
-  let cursor = null;
-  while (true) {
-    const j = await listUnfulfilledRedemptions({ rewardId: process.env.TWITCH_SONG_REWARD_ID, after: cursor, first: 50 });
-    const arr = j?.data || [];
-    const hit = arr.find(x => x?.user_login?.toLowerCase() === userLogin.toLowerCase());
-    if (hit) {
-      await updateRedemptionStatus(process.env.TWITCH_SONG_REWARD_ID, hit.id, "FULFILLED");
-      return true;
-    }
-    const next = j?.pagination?.cursor;
-    if (!next || arr.length === 0) break;
-    cursor = next;
-  }
-  return false;
-}
-let BROADCASTER_ID = TWITCH_BROADCASTER_ID || null;
-
-function helixHeaders() {
-  if (!REFUND_ENABLED) throw new Error("refund_not_configured");
-  return {
-    "Client-ID": TWITCH_CLIENT_ID,
-    "Authorization": `Bearer ${TWITCH_REDEMPTIONS_TOKEN}`,
-    "Content-Type": "application/json"
-  };
-}
-
-async function ensureBroadcasterId() {
-  if (BROADCASTER_ID) return BROADCASTER_ID;
-  if (!REFUND_ENABLED) return null;
-  const r = await fetch("https://api.twitch.tv/helix/users", { headers: helixHeaders() });
-  const j = await r.json();
-  const id = j?.data?.[0]?.id;
-  if (!id) throw new Error("cant_resolve_broadcaster_id");
-  BROADCASTER_ID = id;
-  return id;
-}
-
-async function listUnfulfilledRedemptions({ rewardId, after = null, first = 50 }) {
-  await ensureBroadcasterId();
-  const u = new URL("https://api.twitch.tv/helix/channel_points/custom_rewards/redemptions");
-  u.searchParams.set("broadcaster_id", BROADCASTER_ID);
-  u.searchParams.set("status", "UNFULFILLED");
-  u.searchParams.set("sort", "OLDEST");
-  u.searchParams.set("first", String(Math.min(50, Math.max(1, first))));
-  if (rewardId) u.searchParams.set("reward_id", rewardId);
-  if (after) u.searchParams.set("after", after);
-
-  const r = await fetch(u.toString(), { headers: helixHeaders() });
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`list_redemptions_failed:${r.status}:${t.slice(0,120)}`);
-  }
-  return r.json();
-}
-
-async function updateRedemptionStatus(rewardId, redemptionId, status) {
-  await ensureBroadcasterId();
-  const u = new URL("https://api.twitch.tv/helix/channel_points/custom_rewards/redemptions");
-  u.searchParams.set("broadcaster_id", BROADCASTER_ID);
-  u.searchParams.set("reward_id", rewardId);
-  u.searchParams.set("id", redemptionId);
-
-  const r = await fetch(u.toString(), {
-    method: "PATCH",
-    headers: helixHeaders(),
     body: JSON.stringify({ status })
   });
 
@@ -515,7 +419,7 @@ if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET || !REFRESH_TOKEN) {
   process.exit(1);
 }
 if (!REFUND_ENABLED) {
-  console.warn("[sr-bot] Refund/Fulfil is DISABLED (set TWITCH_REDEMPTIONS_TOKEN and TWITCH_CLIENT_ID to enable).");
+  console.warn("[sr-bot] Refund/Fulfil is DISABLED (set TWITCH_REDEMPTIONS_TOKEN or TWITCH_REDEMPTIONS_REFRESH_TOKEN + TWITCH_CLIENT_ID).");
 } else {
   console.log("[sr-bot] Refund/Fulfil is ENABLED.");
 }
@@ -560,8 +464,8 @@ setInterval(sweepTimeouts, 60_000);
    Kommandon & Hantering
    ============================== */
 // Mod-kommandon
-const CMD_LIST_MOD  = /^!srlist$/i;                 // NY: mods-only, lista ALLA
-const CMD_QUEUE     = /^!srqueue$/i;                // kvar som snabböversikt (topp 5)
+const CMD_LIST_MOD  = /^!srlist$/i;                 // mods-only, lista ALLT
+const CMD_QUEUE     = /^!srqueue$/i;                // snabböversikt (topp 5)
 const CMD_APPR_ALL  = /^!srappr(?:ove|ove)\s*$/i;
 const CMD_APPR_ONE  = /^!srappr(?:ove|ove)\s+(.+)$/i;
 const CMD_DENY      = /^!srdeny\s+(.+)$/i;
@@ -585,10 +489,8 @@ client.on("message", async (_channel, userstate, message, self) => {
   // Kanalpoäng → pending
   if (rewardId && TWITCH_SONG_REWARD_ID && rewardId === TWITCH_SONG_REWARD_ID) {
     const q = trimText(message);
-    const item = addPending(userstate, q, rewardId);
-    if (REPLY) {
-      client.say(TWITCH_CHANNEL, `${tag(userstate)} din låtförfrågan togs emot och väntar på moderering (#${pending.length}).`);
-    }
+    addPending(userstate, q, rewardId);
+    if (REPLY) client.say(TWITCH_CHANNEL, `${tag(userstate)} din låtförfrågan togs emot och väntar på moderering (#${pending.length}).`);
     return;
   }
 
@@ -608,10 +510,9 @@ client.on("message", async (_channel, userstate, message, self) => {
   // === Mod-kommandon ===
   if (!isModOrBroadcaster(userstate)) return;
 
-  // NY: !srlist (mods only) – lista ALLT med vem som önskat
+  // !srlist – lista ALLT (med vem som önskade)
   if (CMD_LIST_MOD.test(message)) {
     if (!pending.length) { if (REPLY) client.say(TWITCH_CHANNEL, `Inga väntande song requests.`); return; }
-
     const lines = pending.map((p, i) => {
       const idx = i + 1;
       const who = p.display || p.user;
@@ -620,12 +521,11 @@ client.on("message", async (_channel, userstate, message, self) => {
         : (p.resolved?.url || p.query || "(okänd)");
       return `${idx}. ${who}: ${label}`;
     });
-
     await sayChunks(client, TWITCH_CHANNEL, `Väntelista (${pending.length}):`, lines, " | ");
     return;
   }
 
-  // Befintlig snabböversikt (topp 5)
+  // !srqueue – topp 5
   if (CMD_QUEUE.test(message)) {
     if (!pending.length) { if (REPLY) client.say(TWITCH_CHANNEL, `Inga väntande song requests.`); return; }
     const list = pending.slice(0, 5).map((p, i) => {
@@ -640,6 +540,7 @@ client.on("message", async (_channel, userstate, message, self) => {
     return;
   }
 
+  // !srapprove – godkänn hela kön
   if (CMD_APPR_ALL.test(message)) {
     if (!pending.length) { if (REPLY) client.say(TWITCH_CHANNEL, `Det finns inga väntande requests att godkänna.`); return; }
     if (REPLY) client.say(TWITCH_CHANNEL, `Godkänner hela kön (${pending.length})…`);
@@ -676,15 +577,9 @@ client.on("message", async (_channel, userstate, message, self) => {
       } catch (e) {
         const msg = String(e?.message || e);
         if (REPLY) {
-          if (msg.includes("no_active_device")) {
-            client.say(TWITCH_CHANNEL, `Ingen aktiv Spotify-enhet. Starta Spotify först.`);
-            break;
-          } else if (msg.includes("no_access_token")) {
-            client.say(TWITCH_CHANNEL, `Spotify-token saknas/utgången. Kör om /login på servern.`);
-            break;
-          } else {
-            client.say(TWITCH_CHANNEL, `Kunde inte lägga till i kön just nu för ${tag(item.display)} – fortsätter…`);
-          }
+          if (msg.includes("no_active_device")) { client.say(TWITCH_CHANNEL, `Ingen aktiv Spotify-enhet. Starta Spotify först.`); break; }
+          else if (msg.includes("no_access_token")) { client.say(TWITCH_CHANNEL, `Spotify-token saknas/utgången. Kör om /login på servern.`); break; }
+          else { client.say(TWITCH_CHANNEL, `Kunde inte lägga till i kön just nu för ${tag(item.display)} – fortsätter…`); }
         }
         console.error("[sr-bot] approve-all error:", e);
       }
@@ -694,6 +589,7 @@ client.on("message", async (_channel, userstate, message, self) => {
     return;
   }
 
+  // !srapprove <n|@user> – godkänn specifik
   const apprOne = message.match(CMD_APPR_ONE);
   if (apprOne) {
     const target = trimText(apprOne[1] || "");
@@ -732,6 +628,7 @@ client.on("message", async (_channel, userstate, message, self) => {
     return;
   }
 
+  // !srdeny <n|@user> – neka + refund
   const deny = message.match(CMD_DENY);
   if (deny) {
     const target = trimText(deny[1] || "");
@@ -755,6 +652,7 @@ client.on("message", async (_channel, userstate, message, self) => {
     return;
   }
 
+  // !srclear – rensa allt (refund om aktiverad)
   if (CMD_CLEAR.test(message)) {
     if (!pending.length) { if (REPLY) client.say(TWITCH_CHANNEL, `Kön är redan tom.`); return; }
 
@@ -774,6 +672,7 @@ client.on("message", async (_channel, userstate, message, self) => {
     return;
   }
 
+  // !srstatus – antal + topp 3
   if (CMD_STATUS.test(message)) {
     const n = pending.length;
     const peek = pending.slice(0, 3).map(p => {
