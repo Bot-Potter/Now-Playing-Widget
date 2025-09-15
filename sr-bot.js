@@ -145,38 +145,66 @@ async function spotifySearchBestTrack(query) {
   };
 }
 
-async function spotifyAddToQueue(trackUri) {
-  const at = await getSpotifyAccessToken();
-  const u = new URL("https://api.spotify.com/v1/me/player/queue");
-  u.searchParams.set("uri", trackUri);
+// === NY VERSION AV spotifyAddToQueue ===
+async function spotifyAddToQueue(trackUri, opts = {}) {
+  const { maxRetries = 5, baseDelayMs = 500 } = opts;
 
-  const r = await fetch(u.toString(), {
-    method: "POST",
-    headers: { Authorization: `Bearer ${at}` }
-  });
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const at = await getSpotifyAccessToken();
+    const u = new URL("https://api.spotify.com/v1/me/player/queue");
+    u.searchParams.set("uri", trackUri);
 
-  // Läs alltid response som text (kan vara tomt)
-  const txt = await r.text().catch(() => "");
+    const r = await fetch(u.toString(), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${at}` }
+    });
 
-  // Spotify-standard för success
-  if (r.status === 204) return;
+    // 204 = standard success
+    if (r.status === 204) return;
 
-  // Vissa miljöer svarar 200 + tom body -> behandla som OK
-  if (r.status === 200 && (!txt || txt.trim() === "")) return;
+    // 200 + tom respons = vissa miljöer rapporterar OK så här
+    if (r.status === 200) {
+      const txt = await r.text().catch(() => "");
+      if (!txt || txt.trim() === "") return;
+    }
 
-  // Vanliga fel
-  if (r.status === 404) throw new Error("no_active_device");
+    if (r.status === 404) throw new Error("no_active_device");
 
-  // Försök extrahera vettigt felmeddelande
-  let msg = txt;
-  try {
-    const j = JSON.parse(txt);
-    msg = j?.error?.message || j?.message || txt || "unknown";
-  } catch (_) {}
+    if (r.status === 429) {
+      const raHeader = r.headers.get("retry-after");
+      const raSeconds = raHeader ? parseFloat(raHeader) : NaN;
+      const waitMs = Number.isFinite(raSeconds)
+        ? Math.max(250, Math.round(raSeconds * 1000))
+        : Math.max(250, Math.round(Math.pow(2, attempt) * baseDelayMs));
 
-  throw new Error(`queue_failed:${r.status}:${String(msg).slice(0,120)}`);
+      await sleep(waitMs);
+      if (attempt < maxRetries) continue;
+
+      const txt = await r.text().catch(() => "");
+      throw new Error(`queue_failed:429:${(txt || "rate_limited").slice(0,120)}`);
+    }
+
+    if ((r.status >= 500 || r.status === 401 || r.status === 408) && attempt < maxRetries) {
+      const waitMs = Math.max(250, Math.round(Math.pow(2, attempt) * baseDelayMs));
+      await sleep(waitMs);
+      continue;
+    }
+
+    const txt = await r.text().catch(() => "");
+    let msg = txt;
+    try {
+      const j = JSON.parse(txt);
+      msg = j?.error?.message || j?.message || txt || "unknown";
+    } catch (_) {}
+    throw new Error(`queue_failed:${r.status}:${String(msg).slice(0,120)}`);
+  }
+
+  throw new Error("queue_failed:exhausted_retries");
 }
 
+/* ==============================
+   Helix (refund/fulfil) – AUTO REFRESH
+   ============================== */
 /* ==============================
    Helix (refund/fulfil) – AUTO REFRESH
    ============================== */
