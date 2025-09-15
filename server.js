@@ -8,6 +8,7 @@ import crypto from "crypto";
 import tmi from "tmi.js";
 import { twitchAuthRouter } from "./twitch-auth.js";
 
+
 dotenv.config();
 
 const app = express();
