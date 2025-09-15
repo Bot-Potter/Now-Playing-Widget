@@ -1,9 +1,10 @@
 // twitch-auth.js
-// Router för Twitch OAuth (channel points redemptions). Monteras i din server.js.
+// Router för Twitch OAuth (channel points redemptions). Monteras i server.js.
+//
 // Endpoints:
-//   GET  /twitch/login         -> redirectar till Twitch OAuth
+//   GET  /twitch/login         -> redirect till Twitch OAuth
 //   GET  /twitch/callback      -> tar emot code, visar access+refresh token (skyddad via ADMIN_SECRET header)
-//   POST /twitch/refresh       -> byter refresh->access (skyddad via ADMIN_SECRET header)
+//   POST /twitch/refresh       -> byt refresh->access (skyddad via ADMIN_SECRET header)
 //   GET  /twitch/whoami        -> verifiera token (skyddad via ADMIN_SECRET header)
 
 import express from "express";
@@ -31,6 +32,7 @@ function adminGuard(req, res, next) {
 export function twitchAuthRouter() {
   const router = express.Router();
 
+  // 1) Starta OAuth
   router.get("/twitch/login", (req, res) => {
     const clientId = requireEnv("TWITCH_CLIENT_ID");
     const redirectUri = requireEnv("TWITCH_REDIRECT_URI");
@@ -47,6 +49,7 @@ export function twitchAuthRouter() {
     res.redirect("https://id.twitch.tv/oauth2/authorize?" + params.toString());
   });
 
+  // 2) Ta emot token
   router.get("/twitch/callback", adminGuard, async (req, res) => {
     const { code, error } = req.query;
     if (error) return res.status(400).send("Twitch error: " + error);
@@ -68,7 +71,6 @@ export function twitchAuthRouter() {
     const data = await r.json();
     if (!r.ok) return res.status(400).send("Token error: " + JSON.stringify(data, null, 2));
 
-    // Visa upp så du kan kopiera in i .env
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(`
       <style>body{font-family:system-ui;padding:24px;max-width:900px;margin:auto}pre{background:#0b0b0b;color:#0f0;padding:12px;border-radius:8px;overflow:auto}</style>
@@ -77,13 +79,13 @@ export function twitchAuthRouter() {
       <pre>TWITCH_REDEMPTIONS_TOKEN=${data.access_token}</pre>
       <pre>TWITCH_REDEMPTIONS_REFRESH_TOKEN=${data.refresh_token}</pre>
       <p>Scopes: ${Array.isArray(data.scope) ? data.scope.join(", ") : "(okänt)"}</p>
-      <p>Access-tokenen är kortlivad (typ ~4h). När den dör, POST:a till <code>/twitch/refresh</code> för att få en ny via refresh_token.</p>
+      <p>Access-tokenen är kortlivad (~4h). När den dör, POST:a till <code>/twitch/refresh</code> för att få en ny via refresh_token.</p>
       <hr>
       <p><b>Tips:</b> Testa <code>GET /twitch/whoami</code> (med header <code>x-admin-secret</code>) för att verifiera token.</p>
     `);
   });
 
-  // Byt refresh -> access
+  // 3) Refresh access-token
   router.post("/twitch/refresh", adminGuard, express.json(), async (req, res) => {
     const clientId = requireEnv("TWITCH_CLIENT_ID");
     const clientSecret = requireEnv("TWITCH_CLIENT_SECRET");
@@ -110,7 +112,7 @@ export function twitchAuthRouter() {
     });
   });
 
-  // Verifiera access-token mot Helix /users
+  // 4) Validera token / hämta broadcaster
   router.get("/twitch/whoami", adminGuard, async (req, res) => {
     const clientId = requireEnv("TWITCH_CLIENT_ID");
     const token = (req.headers["authorization"]?.toString().replace(/^Bearer\s+/i,"") ||
