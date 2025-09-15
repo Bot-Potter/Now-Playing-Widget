@@ -50,7 +50,7 @@ export function twitchAuthRouter() {
   });
 
   // 2) Ta emot token
-  router.get("/twitch/callback", adminGuard, async (req, res) => {
+    router.get("/twitch/callback", async (req, res) => {
     const { code, error } = req.query;
     if (error) return res.status(400).send("Twitch error: " + error);
     if (!code) return res.status(400).send("Missing code");
