@@ -55,13 +55,17 @@ const {
   TWITCH_CLIENT_SECRET,
   TWITCH_BROADCASTER_ID,
   TWITCH_REDEMPTIONS_TOKEN,        // access token för broadcaster (channel:manage:redemptions)
-  TWITCH_REDEMPTIONS_REFRESH_TOKEN // refresh token för broadcaster (valfritt men rekommenderat)
+  TWITCH_REDEMPTIONS_REFRESH_TOKEN, // refresh token för broadcaster (valfritt men rekommenderat)
+
+  // === NYTT: hur ofta vi testar att lägga deferred-låtar i kön (ms)
+  SR_DEFER_POLL_MS = "5000"
 } = process.env;
 
 const REPLY = String(TWITCH_REPLY_ENABLED).toLowerCase() === "true";
 const MAX_PENDING = Math.max(1, parseInt(SR_MAX_PENDING, 10) || 50);
 const APPROVE_ALL_DELAY_MS = Math.max(0, parseInt(SR_APPROVE_ALL_DELAY_MS, 10) || 600);
 const PENDING_TTL_MS = Math.max(60_000, parseInt(SR_PENDING_TTL_MS, 10) || 900_000);
+const DEFER_POLL_MS = Math.max(1000, parseInt(SR_DEFER_POLL_MS, 10) || 5000);
 
 /* ==============================
    Helpers
@@ -162,12 +166,11 @@ async function spotifyAddToQueue(trackUri, opts = {}) {
     // 204 = standard success
     if (r.status === 204) return;
 
-// 200 + tom respons = vissa miljöer rapporterar OK så här
-if (r.status === 200) {
-  const txt = await r.text().catch(() => "");
-  if (!txt || txt.trim() === "") return;
-}
-
+    // 200 + tom respons = vissa miljöer rapporterar OK så här
+    if (r.status === 200) {
+      const txt = await r.text().catch(() => "");
+      if (!txt || txt.trim() === "") return;
+    }
 
     if (r.status === 404) throw new Error("no_active_device");
 
@@ -203,9 +206,6 @@ if (r.status === 200) {
   throw new Error("queue_failed:exhausted_retries");
 }
 
-/* ==============================
-   Helix (refund/fulfil) – AUTO REFRESH
-   ============================== */
 /* ==============================
    Helix (refund/fulfil) – AUTO REFRESH
    ============================== */
@@ -437,6 +437,90 @@ function removePending(id) {
 }
 
 /* ==============================
+   Deferred Queue (ingen aktiv Spotify-enhet)
+   ============================== */
+/**
+ * deferred item:
+ * {
+ *   user, display, resolved: { uri, name, artists, url }, rewardId
+ * }
+ */
+const deferred = [];
+
+// Hjälp: lägg till i deferred och ta bort från pending
+function pushDeferredFromPending(item) {
+  if (!item?.resolved?.uri) return false;
+  deferred.push({
+    user: item.user,
+    display: item.display,
+    resolved: item.resolved,
+    rewardId: item.rewardId || null
+  });
+  removePending(item.id);
+  return true;
+}
+
+// Kollar om det finns en aktiv Spotify-enhet
+async function hasActiveSpotifyDevice() {
+  try {
+    const at = await getSpotifyAccessToken();
+    const r = await fetch("https://api.spotify.com/v1/me/player", {
+      headers: { Authorization: `Bearer ${at}` }
+    });
+
+    // 204 = ingen enhet/inget spelas
+    if (r.status === 204) return false;
+    if (!r.ok) return false;
+
+    const j = await r.json().catch(() => null);
+    // /me/player svarar normalt med ett "device"-objekt
+    const active = !!(j && j.device && j.device.is_active);
+    return active;
+  } catch {
+    return false;
+  }
+}
+
+// Försök lägga in första låten i deferred-kön (om enhet finns)
+async function processDeferredOnce() {
+  if (!deferred.length) return;
+  const haveDevice = await hasActiveSpotifyDevice();
+  if (!haveDevice) return;
+
+  const item = deferred.shift();
+  try {
+    await spotifyAddToQueue(item.resolved.uri);
+
+    // Fulfil om aktiverat
+    if (REFUND_ENABLED && TWITCH_SONG_REWARD_ID) {
+      try { await fulfilOldestForUser(item.user); } catch(e) {
+        console.warn("[sr-bot] fulfil deferred error:", e.message || e);
+      }
+    }
+
+    if (REPLY) {
+      const label = item.resolved.name
+        ? `${item.resolved.name} — ${item.resolved.artists || ""}${item.resolved.url ? " " + item.resolved.url : ""}`
+        : (item.resolved.url || "");
+      client.say(TWITCH_CHANNEL, `${tag(item.display)} din låt lades i kön när Spotify startade: ${label}`);
+    }
+  } catch (e) {
+    const msg = String(e?.message || e);
+    // Om fortfarande ingen enhet – lägg tillbaka först i kö
+    if (msg.includes("no_active_device")) {
+      deferred.unshift(item);
+      return;
+    }
+    // Annars – putta längst bak och försök igen senare
+    deferred.push(item);
+    console.warn("[sr-bot] deferred add error:", msg);
+  }
+}
+
+// Kör var DEFER_POLL_MS
+setInterval(processDeferredOnce, DEFER_POLL_MS);
+
+/* ==============================
    Twitch Client
    ============================== */
 if (!TWITCH_USERNAME || !TWITCH_OAUTH_TOKEN || !TWITCH_CHANNEL) {
@@ -605,16 +689,40 @@ client.on("message", async (_channel, userstate, message, self) => {
         removePending(item.id);
       } catch (e) {
         const msg = String(e?.message || e);
+
+        // Om ingen enhet: lägg denna + redan resolvade återstående i deferred och bryt loopen
+        if (msg.includes("no_active_device")) {
+          const snapshotIdx = snapshot.findIndex(x => x.id === item.id);
+          // Flytta aktuellt item om det fortfarande finns kvar
+          pushDeferredFromPending(item);
+          // Flytta resterande i snapshot (efter aktuellt) om de fortfarande är pending och RESOLVED
+          for (let k = snapshotIdx + 1; k < snapshot.length; k++) {
+            const rest = pending.find(p => p.id === snapshot[k].id);
+            if (rest && rest.resolved && rest.resolved.uri) {
+              pushDeferredFromPending(rest);
+            }
+          }
+
+          if (REPLY) {
+            client.say(TWITCH_CHANNEL, `Ingen aktiv Spotify-enhet. Jag köar godkända låtar och lägger till dem automatiskt när Spotify är igång.`);
+          }
+          break; // bryt approve-all loopen
+        }
+
+        if (msg.includes("no_access_token")) {
+          if (REPLY) client.say(TWITCH_CHANNEL, `Spotify-token saknas/utgången. Kör om /login på servern.`);
+          console.error("[sr-bot] approve-all error:", e);
+          break;
+        }
+
         if (REPLY) {
-          if (msg.includes("no_active_device")) { client.say(TWITCH_CHANNEL, `Ingen aktiv Spotify-enhet. Starta Spotify först.`); break; }
-          else if (msg.includes("no_access_token")) { client.say(TWITCH_CHANNEL, `Spotify-token saknas/utgången. Kör om /login på servern.`); break; }
-          else { client.say(TWITCH_CHANNEL, `Kunde inte lägga till i kön just nu för ${tag(item.display)} – fortsätter…`); }
+          client.say(TWITCH_CHANNEL, `Kunde inte lägga till i kön just nu för ${tag(item.display)} – fortsätter…`);
         }
         console.error("[sr-bot] approve-all error:", e);
       }
       if (APPROVE_ALL_DELAY_MS) await sleep(APPROVE_ALL_DELAY_MS);
     }
-    if (REPLY) client.say(TWITCH_CHANNEL, `Klart! Kvar i väntelistan: ${pending.length}.`);
+    if (REPLY) client.say(TWITCH_CHANNEL, `Klart! Kvar i väntelistan: ${pending.length}. Väntar på aktiv Spotify-enhet: ${deferred.length}.`);
     return;
   }
 
@@ -647,9 +755,22 @@ client.on("message", async (_channel, userstate, message, self) => {
       removePending(item.id);
     } catch (e) {
       const msg = String(e?.message || e);
+      if (msg.includes("no_active_device")) {
+        // Lägg i deferred och meddela
+        const ok = pushDeferredFromPending(item);
+        if (REPLY) {
+          client.say(
+            TWITCH_CHANNEL,
+            ok
+              ? `${tag(item.display)} ingen aktiv Spotify-enhet just nu – jag köar den och lägger till automatiskt när Spotify är igång.`
+              : `${tag(item.display)} ingen aktiv Spotify-enhet just nu. Försök igen snart.`
+          );
+        }
+        return;
+      }
+
       if (REPLY) {
-        if (msg.includes("no_active_device")) client.say(TWITCH_CHANNEL, `Ingen aktiv Spotify-enhet. Starta Spotify först.`);
-        else if (msg.includes("no_access_token")) client.say(TWITCH_CHANNEL, `Spotify-token saknas/utgången. Kör om /login på servern.`);
+        if (msg.includes("no_access_token")) client.say(TWITCH_CHANNEL, `Spotify-token saknas/utgången. Kör om /login på servern.`);
         else client.say(TWITCH_CHANNEL, `Kunde inte lägga till i kön just nu.`);
       }
       console.error("[sr-bot] approve error:", e);
@@ -701,14 +822,14 @@ client.on("message", async (_channel, userstate, message, self) => {
     return;
   }
 
-  // !srstatus – antal + topp 3
+  // !srstatus – antal + topp 3 + deferred
   if (CMD_STATUS.test(message)) {
     const n = pending.length;
     const peek = pending.slice(0, 3).map(p => {
       const who = p.display || p.user;
       return `${who}: ${(p.resolved?.name || p.resolved?.url || p.query || "(okänd)")}`;
     });
-    if (REPLY) client.say(TWITCH_CHANNEL, `Pending: ${n}${peek.length ? " | " + peek.join(" | ") : ""}`);
+    if (REPLY) client.say(TWITCH_CHANNEL, `Pending: ${n} | Väntar på aktiv enhet: ${deferred.length}${peek.length ? " | " + peek.join(" | ") : ""}`);
     return;
   }
 });
