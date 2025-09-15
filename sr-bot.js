@@ -162,11 +162,12 @@ async function spotifyAddToQueue(trackUri, opts = {}) {
     // 204 = standard success
     if (r.status === 204) return;
 
-    // 200 + tom respons = vissa miljöer rapporterar OK så här
-    if (r.status === 200) {
-      const txt = await r.text().catch(() => "");
-      if (!txt || txt.trim() === "") return;
-    }
+// 200 + tom respons = vissa miljöer rapporterar OK så här
+if (r.status === 200) {
+  const txt = await r.text().catch(() => "");
+  if (!txt || txt.trim() === "") return;
+}
+
 
     if (r.status === 404) throw new Error("no_active_device");
 
