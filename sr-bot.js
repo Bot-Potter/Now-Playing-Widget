@@ -163,14 +163,8 @@ async function spotifyAddToQueue(trackUri, opts = {}) {
       headers: { Authorization: `Bearer ${at}` }
     });
 
-    // 204 = standard success
-    if (r.status === 204) return;
-
-    // 200 + tom respons = vissa miljöer rapporterar OK så här
-    if (r.status === 200) {
-      const txt = await r.text().catch(() => "");
-      if (!txt || txt.trim() === "") return;
-    }
+    // ✅ Räkna ALLA 2xx som lyckat
+    if (r.status >= 200 && r.status < 300) return;
 
     if (r.status === 404) throw new Error("no_active_device");
 
@@ -180,10 +174,8 @@ async function spotifyAddToQueue(trackUri, opts = {}) {
       const waitMs = Number.isFinite(raSeconds)
         ? Math.max(250, Math.round(raSeconds * 1000))
         : Math.max(250, Math.round(Math.pow(2, attempt) * baseDelayMs));
-
       await sleep(waitMs);
       if (attempt < maxRetries) continue;
-
       const txt = await r.text().catch(() => "");
       throw new Error(`queue_failed:429:${(txt || "rate_limited").slice(0,120)}`);
     }
@@ -464,18 +456,32 @@ function pushDeferredFromPending(item) {
 async function hasActiveSpotifyDevice() {
   try {
     const at = await getSpotifyAccessToken();
-    const r = await fetch("https://api.spotify.com/v1/me/player", {
-      headers: { Authorization: `Bearer ${at}` }
-    });
 
-    // 204 = ingen enhet/inget spelas
-    if (r.status === 204) return false;
-    if (!r.ok) return false;
+    // Försök 1: /me/player
+    {
+      const r = await fetch("https://api.spotify.com/v1/me/player", {
+        headers: { Authorization: `Bearer ${at}` }
+      });
 
-    const j = await r.json().catch(() => null);
-    // /me/player svarar normalt med ett "device"-objekt
-    const active = !!(j && j.device && j.device.is_active);
-    return active;
+      if (r.status >= 200 && r.status < 300) {
+        const j = await r.json().catch(() => null);
+        if (j && ((j.device && j.device.is_active) || j.is_playing)) return true;
+      }
+    }
+
+    // Försök 2: /me/player/devices
+    {
+      const r2 = await fetch("https://api.spotify.com/v1/me/player/devices", {
+        headers: { Authorization: `Bearer ${at}` }
+      });
+      if (r2.status >= 200 && r2.status < 300) {
+        const j2 = await r2.json().catch(() => null);
+        const devices = Array.isArray(j2?.devices) ? j2.devices : [];
+        if (devices.some(d => d && d.is_active)) return true;
+      }
+    }
+
+    return false;
   } catch {
     return false;
   }
