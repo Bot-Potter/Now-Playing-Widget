@@ -8,7 +8,6 @@ import crypto from "crypto";
 import tmi from "tmi.js";
 import { twitchAuthRouter } from "./twitch-auth.js";
 // LÄGG TILL högt upp i server.js
-import { getNowPlayingRobust } from "./lib/nowPlayingService.js";
 
 
 dotenv.config();
