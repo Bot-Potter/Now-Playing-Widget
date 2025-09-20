@@ -94,5 +94,6 @@ export async function spotifyFetchJSON(url, {
         continue;
       }
       throw e;
+      }
   }
 }
