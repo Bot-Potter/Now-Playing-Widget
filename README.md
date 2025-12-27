@@ -1,196 +1,338 @@
-# 🎵 Twitch Låtförfrågningssystem# 🎵 Twitch Låtförfrågningssystem# 🎵 Twitch Song Request System# 🎵 Twitch Song Request System# 🎵 Twitch Song Request System# Twitch Song Request System
-
-
+# 🎵 Twitch Låtförfrågningssystem
 
 Ett komplett system för låtförfrågningar på Twitch med Spotify-integration. Tittare kan köa låtar via kanalpoäng, och moderatorer har full kontroll över kön.
-
-
-
-[![Node.js](https://img.shields.io/badge/Node.js-v18+-green.svg)](https://nodejs.org/)Ett komplett system för låtförfrågningar på Twitch med Spotify-integration. Tittare kan köa låtar via kanalpoäng, och moderatorer har full kontroll över kön.
-
+[![Node.js](https://img.shields.io/badge/Node.js-v18+-green.svg)](https://nodejs.org/)
 [![Licens: MIT](https://img.shields.io/badge/Licens-MIT-blue.svg)](LICENSE)
-
 [![Spotify API](https://img.shields.io/badge/Spotify-API-1DB954.svg)](https://developer.spotify.com/)
-
 [![Twitch](https://img.shields.io/badge/Twitch-Integration-9146FF.svg)](https://dev.twitch.tv/)
+---
 
-[![Node.js](https://img.shields.io/badge/Node.js-v18+-green.svg)](https://nodejs.org/)Ett komplett system för låtförfrågningar på Twitch med Spotify-integration. Tittare kan köa låtar via Channel Points, och moderatorer har full kontroll över kön.
+## 📋 Innehållsförteckning
+- [Funktioner](#-funktioner)
+- [Krav](#-krav)
+- [Installation](#-installation)
+---
+
+## ✨ Funktioner
+### 🎤 För tittare
+
+- **Kanalpoäng**: låtförfrågningar via Channel Points.
+- **Flexibel sökning**: låtnamn/artist eller Spotify-länk/URI.
+- **Dubblettskydd**: filtrerar nyligen spelade låtar.
+- **Automatisk återbetalning**: vid fel eller nekade förfrågningar.
+
+### 🛡️ För moderatorer
+- **`!sr <låt>`**: köa låt gratis (utan kanalpoäng).
+- **`!srapprove` / `!srdeny`**: godkänn/neka väntande requests.
+- **`!srclear` / `!srskip` / `!srqueue`**: köhantering.
+### 🎛️ För streamers
+
+- **Administrationspanel** i webbläsaren.
+- **Uppdatera belöningspris i realtid**.
+- **OBS-överlägg** (”Spelar nu”).
+- **Uppskjuten kö** om Spotify inte är aktivt.
 
 ---
 
-[![Licens: MIT](https://img.shields.io/badge/Licens-MIT-blue.svg)](LICENSE)
+## 🔧 Krav
 
-## 📋 Innehållsförteckning
+- **Node.js** v18 eller senare
+- **Spotify Premium** (krävs för att lägga till i kö)
+- **Twitch-konto** med affiliate/partner (för kanalpoäng)
+---
 
-[![Spotify API](https://img.shields.io/badge/Spotify-API-1DB954.svg)](https://developer.spotify.com/)
+## 📥 Installation
 
-- [Funktioner](#-funktioner)
+1. Installera beroenden:
+```bash
+npm install
+```
 
-- [Krav](#-krav)[![Twitch](https://img.shields.io/badge/Twitch-Integration-9146FF.svg)](https://dev.twitch.tv/)
+2. Första start (skapar `.env`)
+Vid första start kopierar servern automatiskt `.env.example` till `.env` om `.env` saknas.
 
-- [Installation](#-installation)
+---
 
-- [Konfiguration](#-konfiguration)[![Node.js](https://img.shields.io/badge/Node.js-v18+-green.svg)](https://nodejs.org/)Ett komplett system för låtförfrågningar på Twitch med Spotify-integration. Tittare kan köa låtar via Channel Points eller chatkommandon, och moderatorer har full kontroll över kön.
+## ⚙️ Konfiguration
 
-- [Användning](#-användning)
+### Spotify
 
-- [Botkommandon](#-botkommandon)---
+1. Skapa en app i [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+2. Lägg till Redirect URI:
+   - `http://localhost:3000/spotify/callback`
+3. Fyll i dessa värden i `.env`:
 
-- [Administrationsgränssnitt](#-administrationsgränssnitt)
+```env
+SPOTIFY_CLIENT_ID=ditt_client_id
+SPOTIFY_CLIENT_SECRET=ditt_client_secret
+SPOTIFY_REDIRECT_URI=http://localhost:3000/spotify/callback
+```
 
-- [OBS-integration](#-obs-integration)[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+4. Auktorisera:
+   - `http://localhost:3000/spotify/login`
 
-- [Felsökning](#-felsökning)
+### Twitch
 
-- [Projektstruktur](#-projektstruktur)## 📋 Innehållsförteckning
+1. Skapa en app i [Twitch Developer Console](https://dev.twitch.tv/console/apps)
+2. Lägg till Redirect URI:
+   - `http://localhost:3000/twitch/callback`
+3. Fyll i dessa värden i `.env`:
 
+```env
+TWITCH_CLIENT_ID=ditt_client_id
+TWITCH_CLIENT_SECRET=ditt_client_secret
+TWITCH_REDIRECT_URI=http://localhost:3000/twitch/callback
+BROADCASTER_ID=ditt_user_id
 
+TWITCH_BOT_USERNAME=ditt_bot_användarnamn
+TWITCH_BOT_OAUTH=oauth:ditt_token
+TWITCH_CHANNEL=din_kanal
 
----[![Spotify API](https://img.shields.io/badge/Spotify-API-1DB954.svg)](https://developer.spotify.com/)
+TWITCH_SONG_REWARD_ID=ditt_reward_id
+```
 
+4. Auktorisera:
+   - `http://localhost:3000/twitch/login`
 
+---
 
-## ✨ Funktioner- [Funktioner](#-funktioner)
+## 🚀 Starta systemet
 
+Starta server och bot.
 
+```bash
+npm run dev
+```
 
-### 🎤 För Tittare- [Krav](#-krav)[![Twitch](https://img.shields.io/badge/Twitch-Integration-9146FF.svg)](https://dev.twitch.tv/)
+I en annan terminal:
 
-- **Kanalpoäng** - Köa låtar med kanalpoäng
+```bash
+npm run bot
+```
 
-- **Flexibel sökning** - Låtnamn, artist eller Spotify-länkar- [Installation](#-installation)
+På Windows kan du även köra:
 
-- **Smart matchning** - Automatisk igenkänning av "låt av artist"
+```bash
+start.bat
+```
 
-- **Dubblettskydd** - Filtrerar nyligen spelade låtar- [Konfiguration](#-konfiguration)[![Node.js](https://img.shields.io/badge/Node.js-v18+-green.svg)](https://nodejs.org/)<div align="center">A complete Twitch song request and now playing system with Spotify integration, moderation tools, and OBS overlay support.
+---
 
-- **Automatisk återbetalning** - Vid fel eller nekade förfrågningar
+## 🌐 Webbsidor
 
-- [Användning](#-användning)
+| Adress | Beskrivning |
+|---|---|
+| `http://localhost:3000/` | Spelar nu (huvudsida) |
+| `http://localhost:3000/admin.html` | Administrationspanel |
+| `http://localhost:3000/overlay.html` | OBS-överlägg |
+| `http://localhost:3000/setup.html` | Konfigurationsguide |
+| `http://localhost:3000/uppdaterapris` | Uppdatera kanalpoängsbelöning |
 
-### 🛡️ För Moderatorer
+---
 
-- **`!sr <låt>`** - Köa låtar gratis utan kanalpoäng- [Botkommandon](#-botkommandon)---
+## 💬 Botkommandon
 
-- **`!srapprove`** - Godkänn väntande förfrågningar
+### Moderatorer
 
-- **`!srdeny <anledning>`** - Neka med återbetalning- [Administrationsgränssnitt](#-administrationsgränssnitt)
+| Kommando | Beskrivning | Exempel |
+|---|---|---|
+| `!sr <låt>` | Köa låt gratis | `!sr Sandstorm av Darude` |
+| `!srapprove` | Godkänn nästa request | `!srapprove` |
+| `!srdeny <text>` | Neka och återbetala | `!srdeny För lång låt` |
+| `!srclear` | Rensa kön | `!srclear` |
+| `!srskip` | Hoppa över låt | `!srskip` |
+| `!srqueue` | Visa kö | `!srqueue` |
+
+### Exempel på smart sökning
+
+```text
+!sr kolla kolla av nationalteatern
+!sr smells like teen spirit by nirvana
+!sr https://open.spotify.com/track/...
+!sr spotify:track:...
+```
+
+---
+
+## 📺 OBS-integration
+
+Lägg till en **Webbläsarkälla** i OBS:
+
+- URL: `http://localhost:3000/overlay.html`
+- Bredd: `1920`
+- Höjd: `1080`
+
+---
+
+## 🐛 Felsökning
+
+### Port 3000 används redan
+
+Ändra port i `.env`, t.ex.:
+
+```env
+PORT=3001
+```
+
+### Spotify kan inte köa låtar
+
+- Kontrollera att kontot är **Premium**.
+- Se till att Spotify är igång på en enhet och att något spelas.
+
+### Boten kan inte logga in i chatt
+
+- `TWITCH_BOT_OAUTH` måste börja med `oauth:`
+- `TWITCH_CHANNEL` bör vara i gemener (lowercase)
+
+---
+
+## 📁 Projektstruktur
+
+```text
+.
+├── server/
+├── src/
+├── public/
+├── index.html
+├── package.json
+├── .env.example
+└── README.md
+```
+
+---
+
+## 🔒 Säkerhet
+
+- Committa aldrig `.env` (den ignoreras via `.gitignore`).
+- Dela aldrig tokens/nycklar.
+
+---
+
+## 📄 Licens
+
+MIT-licens.
+#+#+#+#+#+#+#+#+assistant to=functions.apply_patch 娱乐赚钱 pickedassistant to=functions.apply_patch  સ્થળassistant to=functions.apply_patch  大发快三是不是assistant to=functions.apply_patchographic error: 400 inferred: {
+- **`!srdeny <anledning>`** - Neka med återbetalning- [OBS-integration](#-obs-integration)[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 - **`!srclear`** - Rensa hela kön
 
-- **`!srskip`** - Hoppa över nuvarande låt- [OBS-integration](#-obs-integration)[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+- **`!srskip`** - Hoppa över nuvarande låt- [Felsökning](#-felsökning)
 
 - **`!srqueue`** - Visa aktiv kö
 
-- [Felsökning](#-felsökning)
+- [Projektstruktur](#-projektstruktur)## 📋 Innehållsförteckning
 
 ### 🎛️ För Streamers
 
-- **Administrationspanel** - Hantera systemet från webbläsaren- [Projektstruktur](#-projektstruktur)## 📋 Innehållsförteckning
 
-- **Uppdatering i realtid** - Ändra pris och beskrivning direkt
+
+- **Administrationspanel** - Hantera systemet från webbläsaren
+
+- **Uppdatering i realtid** - Ändra pris och beskrivning direkt---[![Spotify API](https://img.shields.io/badge/Spotify-API-1DB954.svg)](https://developer.spotify.com/)
 
 - **OBS-överlägg** - Visa "Spelar Nu" på streamen
 
 - **Automatisk tokenförnyelse** - Inga manuella uppdateringar
 
-- **Uppskjuten kö** - Sparar förfrågningar när Spotify är inaktivt---[![Spotify API](https://img.shields.io/badge/Spotify-API-1DB954.svg)](https://developer.spotify.com/)
+- **Uppskjuten kö** - Sparar förfrågningar när Spotify är inaktivt
 
-
+## ✨ Funktioner- [Funktioner](#-funktioner)
 
 ---
 
 
 
-## 🔧 Krav## ✨ Funktioner- [Funktioner](#-funktioner)
+## 🔧 Krav
 
-
+### 🎤 För Tittare- [Krav](#-krav)[![Twitch](https://img.shields.io/badge/Twitch-Integration-9146FF.svg)](https://dev.twitch.tv/)
 
 - **Node.js** v18 eller senare
 
-- **Spotify Premium** (krävs för att lägga till i kö)
+- **Spotify Premium** (krävs för att lägga till i kö)- **Kanalpoäng** - Köa låtar med kanalpoäng
 
-- **Twitch-konto** med affiliate/partner-status### 🎤 För Tittare- [Krav](#-krav)[![Twitch](https://img.shields.io/badge/Twitch-Integration-9146FF.svg)](https://dev.twitch.tv/)
+- **Twitch-konto** med affiliate/partner-status
 
-- **Git** för att klona projektet
-
-- **Kanalpoäng** - Köa låtar med kanalpoäng
-
----
-
-- **Flexibel sökning** - Låtnamn, artist eller Spotify-länkar- [Installation](#-installation)
-
-## 📥 Installation
-
-- **Smart matchning** - Automatisk igenkänning av "låt av artist"
-
-### Steg 1: Klona projektet
-
-- **Dubblettskydd** - Filtrerar nyligen spelade låtar- [Konfiguration](#-konfiguration)![Status](https://img.shields.io/badge/status-production%20ready-brightgreen)## Features
-
-```bash
-
-git clone https://github.com/dittnamn/twitch-song-request.git- **Automatisk återbetalning** - Vid fel eller nekade förfrågningar
-
-cd twitch-song-request
-
-```- [Användning](#-användning)
+- **Git** för att klona projektet- **Flexibel sökning** - Låtnamn, artist eller Spotify-länkar- [Installation](#-installation)
 
 
 
-### Steg 2: Installera beroenden### 🛡️ För Moderatorer
+---- **Smart matchning** - Automatisk igenkänning av "låt av artist"
 
 
 
-```bash- **`!sr <låt>`** - Köa låtar gratis utan kanalpoäng- [Bot-kommandon](#-bot-kommandon)---
-
-npm install
-
-```- **`!srapprove`** - Godkänn väntande förfrågningar
+## 📥 Installation- **Dubblettskydd** - Filtrerar nyligen spelade låtar- [Konfiguration](#-konfiguration)[![Node.js](https://img.shields.io/badge/Node.js-v18+-green.svg)](https://nodejs.org/)<div align="center">A complete Twitch song request and now playing system with Spotify integration, moderation tools, and OBS overlay support.
 
 
 
-### Steg 3: Första start- **`!srdeny <anledning>`** - Neka med återbetalning- [Admin-gränssnitt](#-admin-gränssnitt)
+### Steg 1: Klona projektet- **Automatisk återbetalning** - Vid fel eller nekade förfrågningar
 
 
 
-Kör servern för att automatiskt generera `.env`:- **`!srclear`** - Rensa hela kön
+```bash- [Användning](#-användning)
 
+git clone https://github.com/dittnamn/twitch-song-request.git
 
-
-```bash- **`!srskip`** - Hoppa över nuvarande låt- [OBS Integration](#-obs-integration)![Node Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)
-
-npm run dev
-
-```- **`!srqueue`** - Visa aktiv kö
-
-
-
-Du kommer se:- [Felsökning](#-felsökning)
+cd twitch-song-request### 🛡️ För Moderatorer
 
 ```
 
-✅ Created .env file from .env.example### 🎛️ För Streamers
+- **`!sr <låt>`** - Köa låtar gratis utan kanalpoäng- [Botkommandon](#-botkommandon)---
+
+### Steg 2: Installera beroenden
+
+- **`!srapprove`** - Godkänn väntande förfrågningar
+
+```bash
+
+npm install- **`!srdeny <anledning>`** - Neka med återbetalning- [Administrationsgränssnitt](#-administrationsgränssnitt)
+
+```
+
+- **`!srclear`** - Rensa hela kön
+
+### Steg 3: Första start
+
+- **`!srskip`** - Hoppa över nuvarande låt- [OBS-integration](#-obs-integration)[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+Kör servern för att automatiskt generera `.env`:
+
+- **`!srqueue`** - Visa aktiv kö
+
+```bash
+
+npm run dev- [Felsökning](#-felsökning)
+
+```
+
+### 🎛️ För Streamers
+
+Du kommer se:
+
+- **Administrationspanel** - Hantera systemet från webbläsaren- [Projektstruktur](#-projektstruktur)## 📋 Innehållsförteckning
+
+```
+
+✅ Created .env file from .env.example- **Uppdatering i realtid** - Ändra pris och beskrivning direkt
 
 ⚠️  Please edit .env and add your API credentials before continuing!
 
-```- **Administrationspanel** - Hantera systemet från webbläsaren- [Projektstruktur](#-projektstruktur)## 📋 Innehållsförteckning
+```- **OBS-överlägg** - Visa "Spelar Nu" på streamen
 
 
 
----- **Uppdatering i realtid** - Ändra pris och beskrivning direkt
+---- **Automatisk tokenförnyelse** - Inga manuella uppdateringar
 
 
 
-## ⚙️ Konfiguration- **OBS-överlägg** - Visa "Spelar Nu" på streamen
+## ⚙️ Konfiguration- **Uppskjuten kö** - Sparar förfrågningar när Spotify är inaktivt---[![Spotify API](https://img.shields.io/badge/Spotify-API-1DB954.svg)](https://developer.spotify.com/)
 
 
 
-### 1️⃣ Spotify-konfiguration- **Automatisk tokenförnyelse** - Inga manuella uppdateringar
+### 1️⃣ Spotify-konfiguration
 
 
 
-#### Skapa Spotify-app- **Uppskjuten kö** - Sparar förfrågningar när Spotify är inaktivt---![License](https://img.shields.io/badge/license-MIT-blue)- **Spotify Integration**: Display currently playing songs and manage playback
+#### Skapa Spotify-app---
 
 
 
@@ -198,7 +340,7 @@ Du kommer se:- [Felsökning](#-felsökning)
 
 2. Klicka **"Create app"**
 
-3. Fyll i:---
+3. Fyll i:## 🔧 Krav## ✨ Funktioner- [Funktioner](#-funktioner)
 
    - **Appnamn**: `Twitch Song Request`
 
@@ -206,71 +348,71 @@ Du kommer se:- [Felsökning](#-felsökning)
 
    - **Omdirigeringsadress**: `http://localhost:3000/spotify/callback`
 
-   - **API**: Kryssa i **Web API**## 🔧 Krav## ✨ Funktioner- [Funktioner](#-funktioner)
+   - **API**: Kryssa i **Web API**- **Node.js** v18 eller senare
 
 4. Klicka **"Save"**
 
-5. Kopiera **Client ID** och **Client Secret**
+5. Kopiera **Client ID** och **Client Secret**- **Spotify Premium** (krävs för att lägga till i kö)
 
 
 
-#### Uppdatera .env- **Node.js** v18 eller senare
+#### Uppdatera .env- **Twitch-konto** med affiliate/partner-status### 🎤 För Tittare- [Krav](#-krav)[![Twitch](https://img.shields.io/badge/Twitch-Integration-9146FF.svg)](https://dev.twitch.tv/)
 
 
 
-```env- **Spotify Premium** (krävs för att lägga till i kö)
+```env- **Git** för att klona projektet
 
 SPOTIFY_CLIENT_ID=ditt_client_id
 
-SPOTIFY_CLIENT_SECRET=ditt_client_secret- **Twitch-konto** med affiliate/partner-status### 🎤 För Tittare- [Krav](#-krav)- **Twitch Chat Bot**: Automated song request handling with moderator commands
+SPOTIFY_CLIENT_SECRET=ditt_client_secret- **Kanalpoäng** - Köa låtar med kanalpoäng
 
 SPOTIFY_REDIRECT_URI=http://localhost:3000/spotify/callback
 
-```- **Git** för att klona projektet
+```---
 
 
 
-#### Auktorisera Spotify- **Channel Points** - Köa låtar med kanalpoäng
+#### Auktorisera Spotify- **Flexibel sökning** - Låtnamn, artist eller Spotify-länkar- [Installation](#-installation)
 
 
 
-1. Starta servern: `npm run dev`---
+1. Starta servern: `npm run dev`## 📥 Installation
 
 2. Öppna: `http://localhost:3000/spotify/login`
 
-3. Logga in och godkänn- **Flexibel sökning** - Låtnamn, artist eller Spotify-länkar- [Installation](#-installation)
+3. Logga in och godkänn- **Smart matchning** - Automatisk igenkänning av "låt av artist"
 
 4. Tokens sparas automatiskt
 
-## 📥 Installation
+### Steg 1: Klona projektet
 
 ---
 
-- **Smart matchning** - Automatisk detection av "låt av artist"
+- **Dubblettskydd** - Filtrerar nyligen spelade låtar- [Konfiguration](#-konfiguration)![Status](https://img.shields.io/badge/status-production%20ready-brightgreen)## Features
 
 ### 2️⃣ Twitch-konfiguration
 
-### Steg 1: Klona projektet
+```bash
 
 #### A. Skapa Twitch-applikation
 
-- **Duplikatskydd** - Filtrerar nyligen spelade låtar- [Konfiguration](#-konfiguration)**Ett komplett system för låtförfrågningar på Twitch med Spotify-integration**- **Channel Points**: Automatic fulfillment and refunds for song requests
+git clone https://github.com/dittnamn/twitch-song-request.git- **Automatisk återbetalning** - Vid fel eller nekade förfrågningar
 
 1. Gå till [Twitch Developer Console](https://dev.twitch.tv/console/apps)
 
-2. Klicka **"Register Your Application"**```bash
+2. Klicka **"Register Your Application"**cd twitch-song-request
 
 3. Fyll i:
 
-   - **Namn**: `Song Request Bot`git clone https://github.com/dittnamn/twitch-song-request.git- **Automatisk återbetalning** - Vid fel eller nekade requests
+   - **Namn**: `Song Request Bot````- [Användning](#-användning)
 
    - **OAuth-omdirigeringsadresser**: `http://localhost:3000/twitch/callback`
 
-   - **Kategori**: `Chat Bot`cd twitch-song-request
+   - **Kategori**: `Chat Bot`
 
 4. Klicka **"Create"** → **"Manage"**
 
-5. Kopiera **Client ID** och generera **Client Secret**```  - [Spotify Setup](#1-spotify-setup)
+5. Kopiera **Client ID** och generera **Client Secret**### Steg 2: Installera beroenden### 🛡️ För Moderatorer
 
 
 
@@ -278,23 +420,23 @@ SPOTIFY_REDIRECT_URI=http://localhost:3000/spotify/callback
 
 
 
-1. Gå till: https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/### Steg 2: Installera beroenden### 🛡️ För Moderatorer
+1. Gå till: https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/```bash- **`!sr <låt>`** - Köa låtar gratis utan kanalpoäng- [Bot-kommandon](#-bot-kommandon)---
 
 2. Ange ditt användarnamn
 
-3. Kopiera **User ID**
+3. Kopiera **User ID**npm install
 
 
 
-#### C. Skapa kanalpoängsbelöning```bash- **`!sr <låt>`** - Köa låtar gratis utan Channel Points  - [Twitch Setup](#2-twitch-setup)- **Moderation Tools**: Approve, deny, or clear song requests
+#### C. Skapa kanalpoängsbelöning```- **`!srapprove`** - Godkänn väntande förfrågningar
 
 
 
-**Alternativ 1: Via konfigurationssidan (enklast)**npm install
+**Alternativ 1: Via konfigurationssidan (enklast)**
 
 
 
-1. Öppna `http://localhost:3000/setup.html````- **`!srapprove`** - Godkänn väntande förfrågningar
+1. Öppna `http://localhost:3000/setup.html`### Steg 3: Första start- **`!srdeny <anledning>`** - Neka med återbetalning- [Admin-gränssnitt](#-admin-gränssnitt)
 
 2. Följ guiden under "Skapa låtförfrågningsbelöning"
 
@@ -302,7 +444,7 @@ SPOTIFY_REDIRECT_URI=http://localhost:3000/spotify/callback
 
 4. Klicka **"Skapa belöning"**
 
-5. Belönings-ID kopieras automatiskt### Steg 3: Första start- **`!srdeny <anledning>`** - Neka med återbetalning  - [Environment Variabler](#3-environment-variabler)
+5. Belönings-ID kopieras automatisktKör servern för att automatiskt generera `.env`:- **`!srclear`** - Rensa hela kön
 
 
 
@@ -310,47 +452,47 @@ SPOTIFY_REDIRECT_URI=http://localhost:3000/spotify/callback
 
 
 
-1. Gå till [Twitch Dashboard](https://dashboard.twitch.tv/) → **Community** → **Kanalpoäng**Kör servern för att automatiskt generera `.env`:- **`!srclear`** - Rensa hela kön
+1. Gå till [Twitch Dashboard](https://dashboard.twitch.tv/) → **Community** → **Kanalpoäng**```bash- **`!srskip`** - Hoppa över nuvarande låt- [OBS Integration](#-obs-integration)![Node Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)
 
 2. Klicka **"Lägg till ny anpassad belöning"**
 
-3. Konfigurera:
+3. Konfigurera:npm run dev
 
    - **Titel**: `Låtförfrågan`
 
-   - **Kostnad**: `1000` (eller valfritt)```bash- **`!srskip`** - Skippa nuvarande låt- [Användning](#-användning)[Features](#-features) • [Installation](#-installation) • [Konfiguration](#%EF%B8%8F-konfiguration) • [Användning](#-användning) • [Bot-kommandon](#-bot-kommandon) • [Felsökning](#-felsökning)- **OBS Overlay**: Beautiful now playing display for your stream
+   - **Kostnad**: `1000` (eller valfritt)```- **`!srqueue`** - Visa aktiv kö
 
    - **Beskrivning**: `Köa en låt! Skriv låtnamn eller klistra in Spotify-länk`
 
-   - **Kräver användarinmatning**: `✅ På`npm run dev
+   - **Kräver användarinmatning**: `✅ På`
 
 4. Spara och kopiera belönings-ID från webbadressen
 
-```- **`!srqueue`** - Visa aktiv kö
+Du kommer se:- [Felsökning](#-felsökning)
 
 #### D. Hämta chatt-OAuth-token
 
-
+```
 
 1. Gå till [Twitch Token Generator](https://twitchtokengenerator.com/)
 
-2. Välj **"Bot Chat Token"**Du kommer se:- [Bot-kommandon](#-bot-kommandon)
+2. Välj **"Bot Chat Token"**✅ Created .env file from .env.example### 🎛️ För Streamers
 
 3. Godkänn och kopiera token (inkl. `oauth:` prefix)
 
-```
+⚠️  Please edit .env and add your API credentials before continuing!
 
 #### Uppdatera .env
 
-✅ Created .env file from .env.example### 🎛️ För Streamers
+```- **Administrationspanel** - Hantera systemet från webbläsaren- [Projektstruktur](#-projektstruktur)## 📋 Innehållsförteckning
 
 ```env
 
-# Twitch API⚠️  Please edit .env and add your API credentials before continuing!
+# Twitch API
 
 TWITCH_CLIENT_ID=ditt_client_id
 
-TWITCH_CLIENT_SECRET=ditt_client_secret```- **Admin-panel** - Hantera systemet från webbläsaren- [Admin-gränssnitt](#-admin-gränssnitt)- **Web Dashboard**: Monitor and control the system via web interface
+TWITCH_CLIENT_SECRET=ditt_client_secret---- **Uppdatering i realtid** - Ändra pris och beskrivning direkt
 
 TWITCH_REDIRECT_URI=http://localhost:3000/twitch/callback
 
@@ -358,7 +500,7 @@ BROADCASTER_ID=ditt_user_id
 
 
 
-# Twitch-chattbot---- **Live reward-uppdatering** - Ändra pris och beskrivning i realtid
+# Twitch-chattbot## ⚙️ Konfiguration- **OBS-överlägg** - Visa "Spelar Nu" på streamen
 
 TWITCH_BOT_USERNAME=ditt_bot_användarnamn
 
@@ -366,7 +508,7 @@ TWITCH_BOT_OAUTH=oauth:ditt_token
 
 TWITCH_CHANNEL=din_kanal
 
-## ⚙️ Konfiguration- **OBS Overlay** - Visa "Now Playing" på stream- [OBS Integration](#-obs-integration)
+### 1️⃣ Spotify-konfiguration- **Automatisk tokenförnyelse** - Inga manuella uppdateringar
 
 # Belönings-ID
 
@@ -374,7 +516,7 @@ TWITCH_SONG_REWARD_ID=ditt_reward_id
 
 ```
 
-### 1️⃣ Spotify-konfiguration- **Auto-refresh tokens** - Inga manuella uppdateringar
+#### Skapa Spotify-app- **Uppskjuten kö** - Sparar förfrågningar när Spotify är inaktivt---![License](https://img.shields.io/badge/license-MIT-blue)- **Spotify Integration**: Display currently playing songs and manage playback
 
 #### Auktorisera Twitch API
 
@@ -382,47 +524,47 @@ TWITCH_SONG_REWARD_ID=ditt_reward_id
 
 1. Öppna: `http://localhost:3000/twitch/login`
 
-2. Logga in och godkänn#### Skapa Spotify-app- **Deferred queue** - Sparar förfrågningar när Spotify är inaktivt- [Projektstruktur](#-projektstruktur)</div>- **OAuth Setup**: Easy token generation for Spotify and Twitch
+2. Logga in och godkänn1. Gå till [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
 
 3. Tokens sparas automatiskt
 
-
+2. Klicka **"Create app"**
 
 ---
 
-1. Gå till [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+3. Fyll i:---
 
 ## 🚀 Användning
 
-2. Klicka **"Create app"**
+   - **Appnamn**: `Twitch Song Request`
 
 ### Starta systemet
 
-3. Fyll i:---- [Felsökning](#-felsökning)
+   - **Appbeskrivning**: `Låtförfrågningssystem`
 
 #### Terminal 1: Starta servern
 
-   - **Appnamn**: `Twitch Song Request`
+   - **Omdirigeringsadress**: `http://localhost:3000/spotify/callback`
 
 ```bash
 
-npm run dev   - **Appbeskrivning**: `Låtförfrågningssystem`
+npm run dev   - **API**: Kryssa i **Web API**## 🔧 Krav## ✨ Funktioner- [Funktioner](#-funktioner)
 
 ```
 
-   - **Omdirigeringsadress**: `http://localhost:3000/spotify/callback`
+4. Klicka **"Save"**
 
 Servern startar på `http://localhost:3000`
 
-   - **API**: Kryssa i **Web API**## 🔧 Krav- [Bidra](#-bidra)
+5. Kopiera **Client ID** och **Client Secret**
 
 #### Terminal 2: Starta boten
 
-4. Klicka **"Save"**
+
 
 ```bash
 
-npm run bot5. Kopiera **Client ID** och **Client Secret**
+npm run bot#### Uppdatera .env- **Node.js** v18 eller senare
 
 ```
 
@@ -430,31 +572,31 @@ npm run bot5. Kopiera **Client ID** och **Client Secret**
 
 Boten ansluter till Twitch-chatten
 
-#### Uppdatera .env- **Node.js** v18 eller senare- [Licens](#-licens)
+```env- **Spotify Premium** (krävs för att lägga till i kö)
 
 **Windows: Starta båda samtidigt**
 
-
+SPOTIFY_CLIENT_ID=ditt_client_id
 
 ```bash
 
-start.bat```env- **Spotify Premium** (krävs för att lägga till i kö)
+start.batSPOTIFY_CLIENT_SECRET=ditt_client_secret- **Twitch-konto** med affiliate/partner-status### 🎤 För Tittare- [Krav](#-krav)- **Twitch Chat Bot**: Automated song request handling with moderator commands
 
 ```
 
-SPOTIFY_CLIENT_ID=ditt_client_id
+SPOTIFY_REDIRECT_URI=http://localhost:3000/spotify/callback
 
 ---
 
-SPOTIFY_CLIENT_SECRET=ditt_client_secret- **Twitch** konto med affiliate/partner-status---## Table of Contents
+```- **Git** för att klona projektet
 
 ### Tillgängliga sidor
 
-SPOTIFY_REDIRECT_URI=http://localhost:3000/spotify/callback
+
 
 | Webbadress | Beskrivning |
 
-|------------|-------------|```- **Git** för att klona projektet
+|------------|-------------|#### Auktorisera Spotify- **Channel Points** - Köa låtar med kanalpoäng
 
 | `http://localhost:3000/` | Spelar nu-visning |
 
@@ -462,33 +604,517 @@ SPOTIFY_REDIRECT_URI=http://localhost:3000/spotify/callback
 
 | `http://localhost:3000/overlay.html` | OBS-överlägg |
 
-| `http://localhost:3000/setup.html` | Konfigurationsguide |#### Auktorisera Spotify---
+| `http://localhost:3000/setup.html` | Konfigurationsguide |1. Starta servern: `npm run dev`---
 
 | `http://localhost:3000/uppdaterapris` | Uppdatera belöning |
+
+2. Öppna: `http://localhost:3000/spotify/login`
+
+---
+
+3. Logga in och godkänn- **Flexibel sökning** - Låtnamn, artist eller Spotify-länkar- [Installation](#-installation)
+
+## 💬 Botkommandon
+
+4. Tokens sparas automatiskt
+
+### För Moderatorer
+
+## 📥 Installation
+
+| Kommando | Beskrivning | Exempel |
+
+|----------|-------------|---------|---
+
+| `!sr <låt>` | Köa låt gratis | `!sr Sandstorm av Darude` |
+
+| `!srapprove` | Godkänn nästa i kön | `!srapprove` |- **Smart matchning** - Automatisk detection av "låt av artist"
+
+| `!srdeny <text>` | Neka och återbetala | `!srdeny För lång låt` |
+
+| `!srclear` | Rensa hela kön | `!srclear` |### 2️⃣ Twitch-konfiguration
+
+| `!srskip` | Hoppa över nuvarande | `!srskip` |
+
+| `!srqueue` | Visa kön | `!srqueue` |### Steg 1: Klona projektet
+
+
+
+### För Tittare#### A. Skapa Twitch-applikation
+
+
+
+| Kommando | Beskrivning |- **Duplikatskydd** - Filtrerar nyligen spelade låtar- [Konfiguration](#-konfiguration)**Ett komplett system för låtförfrågningar på Twitch med Spotify-integration**- **Channel Points**: Automatic fulfillment and refunds for song requests
+
+|----------|-------------|
+
+| **Kanalpoäng** | Använd "Låtförfrågan"-belöningen |1. Gå till [Twitch Developer Console](https://dev.twitch.tv/console/apps)
+
+
+
+---2. Klicka **"Register Your Application"**```bash
+
+
+
+### Smart sökning3. Fyll i:
+
+
+
+Boten förstår flera format:   - **Namn**: `Song Request Bot`git clone https://github.com/dittnamn/twitch-song-request.git- **Automatisk återbetalning** - Vid fel eller nekade requests
+
+
+
+```bash   - **OAuth-omdirigeringsadresser**: `http://localhost:3000/twitch/callback`
+
+# Låtnamn
+
+Sandstorm   - **Kategori**: `Chat Bot`cd twitch-song-request
+
+
+
+# Låt + Artist4. Klicka **"Create"** → **"Manage"**
+
+Bohemian Rhapsody av Queen
+
+Smells Like Teen Spirit by Nirvana5. Kopiera **Client ID** och generera **Client Secret**```  - [Spotify Setup](#1-spotify-setup)
+
+
+
+# Spotify-länk
+
+https://open.spotify.com/track/3n3Ppam7vgaVa1iaRUc9Lp
+
+#### B. Hämta Broadcaster ID
+
+# Spotify URI
+
+spotify:track:3n3Ppam7vgaVa1iaRUc9Lp
+
+```
+
+1. Gå till: https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/### Steg 2: Installera beroenden### 🛡️ För Moderatorer
+
+---
+
+2. Ange ditt användarnamn
+
+## 🎛️ Administrationsgränssnitt
+
+3. Kopiera **User ID**
+
+### Uppdatera belöningspris
+
+
+
+1. Gå till `http://localhost:3000/uppdaterapris`
+
+2. Ändra pris, titel eller beskrivning#### C. Skapa kanalpoängsbelöning```bash- **`!sr <låt>`** - Köa låtar gratis utan Channel Points  - [Twitch Setup](#2-twitch-setup)- **Moderation Tools**: Approve, deny, or clear song requests
+
+3. Klicka **"Uppdatera belöning"**
+
+4. Ändringarna träder i kraft direkt
+
+
+
+### Administrationspanel**Alternativ 1: Via konfigurationssidan (enklast)**npm install
+
+
+
+På `http://localhost:3000/admin.html`:
+
+
+
+- ✅ Se nuvarande låt1. Öppna `http://localhost:3000/setup.html````- **`!srapprove`** - Godkänn väntande förfrågningar
+
+- ✅ Hantera väntande kö
+
+- ✅ Visa uppskjuten kö2. Följ guiden under "Skapa låtförfrågningsbelöning"
+
+- ✅ Manuellt köa låtar
+
+3. Fyll i titel, pris och beskrivning
+
+---
+
+4. Klicka **"Skapa belöning"**
+
+## 📺 OBS-integration
+
+5. Belönings-ID kopieras automatiskt### Steg 3: Första start- **`!srdeny <anledning>`** - Neka med återbetalning  - [Environment Variabler](#3-environment-variabler)
+
+### Lägg till Spelar Nu-överlägg
+
+
+
+1. Öppna **OBS Studio**
+
+2. Klicka **+** under Källor → **Webbläsare****Alternativ 2: Manuellt via Twitch-instrumentpanelen**
+
+3. Namnge: `Spelar Nu`
+
+4. Konfigurera:
+
+   - **Webbadress**: `http://localhost:3000/overlay.html`
+
+   - **Bredd**: `1920`1. Gå till [Twitch Dashboard](https://dashboard.twitch.tv/) → **Community** → **Kanalpoäng**Kör servern för att automatiskt generera `.env`:- **`!srclear`** - Rensa hela kön
+
+   - **Höjd**: `1080`
+
+   - ✅ **Uppdatera webbläsare när scenen aktiveras**2. Klicka **"Lägg till ny anpassad belöning"**
+
+5. Klicka **OK**
+
+6. Positionera efter önskemål3. Konfigurera:
+
+
+
+**Överlägget visar:**   - **Titel**: `Låtförfrågan`
+
+
+
+- 🎵 Låtnamn   - **Kostnad**: `1000` (eller valfritt)```bash- **`!srskip`** - Skippa nuvarande låt- [Användning](#-användning)[Features](#-features) • [Installation](#-installation) • [Konfiguration](#%EF%B8%8F-konfiguration) • [Användning](#-användning) • [Bot-kommandon](#-bot-kommandon) • [Felsökning](#-felsökning)- **OBS Overlay**: Beautiful now playing display for your stream
+
+- 👤 Artist
+
+- 🖼️ Omslagsbild   - **Beskrivning**: `Köa en låt! Skriv låtnamn eller klistra in Spotify-länk`
+
+- ⏱️ Förloppsindikator
+
+   - **Kräver användarinmatning**: `✅ På`npm run dev
+
+---
+
+4. Spara och kopiera belönings-ID från webbadressen
+
+## 🐛 Felsökning
+
+```- **`!srqueue`** - Visa aktiv kö
+
+### Servern startar inte
+
+#### D. Hämta chatt-OAuth-token
+
+**Problem:** `Error: listen EADDRINUSE: address already in use :::3000`
+
+
+
+**Lösning:**
+
+1. Gå till [Twitch Token Generator](https://twitchtokengenerator.com/)
+
+- Stoppa processen på port 3000, eller
+
+- Ändra `PORT=3001` i `.env`2. Välj **"Bot Chat Token"**Du kommer se:- [Bot-kommandon](#-bot-kommandon)
+
+
+
+---3. Godkänn och kopiera token (inkl. `oauth:` prefix)
+
+
+
+### Spotify-låtar läggs inte till```
+
+
+
+**Problem:** `403 Forbidden` eller `Premium required`#### Uppdatera .env
+
+
+
+**Lösning:**✅ Created .env file from .env.example### 🎛️ För Streamers
+
+
+
+- Kontrollera att Spotify Premium är aktivt```env
+
+- Starta Spotify-appen på någon enhet
+
+- Spela en låt manuellt först# Twitch API⚠️  Please edit .env and add your API credentials before continuing!
+
+
+
+---TWITCH_CLIENT_ID=ditt_client_id
+
+
+
+### Boten ansluter inteTWITCH_CLIENT_SECRET=ditt_client_secret```- **Admin-panel** - Hantera systemet från webbläsaren- [Admin-gränssnitt](#-admin-gränssnitt)- **Web Dashboard**: Monitor and control the system via web interface
+
+
+
+**Problem:** `Login authentication failed`TWITCH_REDIRECT_URI=http://localhost:3000/twitch/callback
+
+
+
+**Lösning:**BROADCASTER_ID=ditt_user_id
+
+
+
+1. Verifiera att `TWITCH_BOT_USERNAME` är korrekt
+
+2. Kontrollera att `TWITCH_BOT_OAUTH` har `oauth:`-prefix
+
+3. Generera ny token på [Twitch Token Generator](https://twitchtokengenerator.com/)# Twitch-chattbot---- **Live reward-uppdatering** - Ändra pris och beskrivning i realtid
+
+4. Uppdatera `.env` och starta om
+
+TWITCH_BOT_USERNAME=ditt_bot_användarnamn
+
+---
+
+TWITCH_BOT_OAUTH=oauth:ditt_token
+
+### Kanalpoäng fungerar inte
+
+TWITCH_CHANNEL=din_kanal
+
+**Problem:** Inlösen utlöser inte boten
+
+## ⚙️ Konfiguration- **OBS Overlay** - Visa "Now Playing" på stream- [OBS Integration](#-obs-integration)
+
+**Lösning:**
+
+# Belönings-ID
+
+1. Kontrollera att `TWITCH_SONG_REWARD_ID` är korrekt
+
+2. Verifiera auktorisering via `/twitch/login`TWITCH_SONG_REWARD_ID=ditt_reward_id
+
+3. Kolla att belöningen kräver användarinmatning
+
+4. Se till att `BROADCASTER_ID` stämmer```
+
+
+
+---### 1️⃣ Spotify-konfiguration- **Auto-refresh tokens** - Inga manuella uppdateringar
+
+
+
+### Token utgången#### Auktorisera Twitch API
+
+
+
+**Problem:** `Invalid OAuth token`
+
+
+
+**Lösning:** Systemet har automatisk förnyelse, men om det fallerar:1. Öppna: `http://localhost:3000/twitch/login`
+
+
+
+1. Besök `/spotify/login` för Spotify2. Logga in och godkänn#### Skapa Spotify-app- **Deferred queue** - Sparar förfrågningar när Spotify är inaktivt- [Projektstruktur](#-projektstruktur)</div>- **OAuth Setup**: Easy token generation for Spotify and Twitch
+
+2. Besök `/twitch/login` för Twitch
+
+3. Starta om servern och boten3. Tokens sparas automatiskt
 
 
 
 ---
 
-1. Starta servern: `npm run dev`---
 
-## 💬 Botkommandon
 
-2. Öppna: `http://localhost:3000/spotify/login`
+### Duplicerade låtar---
 
-### För Moderatorer
+
+
+**Problem:** Samma låt köas flera gånger1. Gå till [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+
+
+
+**Lösning:**## 🚀 Användning
+
+
+
+- Boten filtrerar automatiskt de senaste 50 låtarna2. Klicka **"Create app"**
+
+- Kontrollera att endast EN botinstans körs
+
+- Verifiera att Spotify Premium är aktivt### Starta systemet
+
+
+
+---3. Fyll i:---- [Felsökning](#-felsökning)
+
+
+
+### Uppskjuten kö töms inte#### Terminal 1: Starta servern
+
+
+
+**Problem:** Låtar fastnar i "uppskjuten kö"   - **Appnamn**: `Twitch Song Request`
+
+
+
+**Lösning:**```bash
+
+
+
+1. Starta Spotify-appennpm run dev   - **Appbeskrivning**: `Låtförfrågningssystem`
+
+2. Spela en låt manuellt
+
+3. Boten köar automatiskt inom 30 sekunder```
+
+
+
+---   - **Omdirigeringsadress**: `http://localhost:3000/spotify/callback`
+
+
+
+### OBS-överlägg tomtServern startar på `http://localhost:3000`
+
+
+
+**Problem:** Ingen visning i OBS   - **API**: Kryssa i **Web API**## 🔧 Krav- [Bidra](#-bidra)
+
+
+
+**Lösning:**#### Terminal 2: Starta boten
+
+
+
+1. Kontrollera att servern körs4. Klicka **"Save"**
+
+2. Testa `http://localhost:3000/overlay.html` i webbläsare
+
+3. Högerklicka i OBS → **"Uppdatera"**```bash
+
+4. Verifiera att bredd/höjd är inställd (1920x1080)
+
+npm run bot5. Kopiera **Client ID** och **Client Secret**
+
+---
+
+```
+
+## 📁 Projektstruktur
+
+
+
+```
+
+twitch-song-request/Boten ansluter till Twitch-chatten
+
+│
+
+├── server/                    # Backend#### Uppdatera .env- **Node.js** v18 eller senare- [Licens](#-licens)
+
+│   ├── index.js              # Huvudserver
+
+│   ├── spotify.js            # Spotify-router**Windows: Starta båda samtidigt**
+
+│   ├── twitch.js             # Twitch-router
+
+│   ├── events.js             # WebSocket-händelser
+
+│   ├── config.js             # Konfiguration
+
+│   └── logger.js             # Loggning```bash
+
+│
+
+├── src/                       # Botstart.bat```env- **Spotify Premium** (krävs för att lägga till i kö)
+
+│   └── sr-bot.js             # Twitch-chattbot
+
+│```
+
+├── public/                    # Frontend
+
+│   ├── admin.html            # AdministrationspanelSPOTIFY_CLIENT_ID=ditt_client_id
+
+│   ├── overlay.html          # OBS-överlägg
+
+│   ├── setup.html            # Konfigurationsguide---
+
+│   └── uppdaterapris.html    # Belöningshanterare
+
+│SPOTIFY_CLIENT_SECRET=ditt_client_secret- **Twitch** konto med affiliate/partner-status---## Table of Contents
+
+├── index.html                 # Spelar nu
+
+├── package.json              # Beroenden### Tillgängliga sidor
+
+├── .env.example              # Miljövariabelmall
+
+└── README.md                 # Denna filSPOTIFY_REDIRECT_URI=http://localhost:3000/spotify/callback
+
+```
+
+| Webbadress | Beskrivning |
+
+---
+
+|------------|-------------|```- **Git** för att klona projektet
+
+## 🔒 Säkerhet
+
+| `http://localhost:3000/` | Spelar nu-visning |
+
+**Viktigt:**
+
+| `http://localhost:3000/admin.html` | Administrationspanel |
+
+- ❌ Dela **ALDRIG** din `.env`
+
+- ❌ Committa **ALDRIG** tokens till Git| `http://localhost:3000/overlay.html` | OBS-överlägg |
+
+- ✅ Använd `.gitignore` (inkluderad)
+
+- ✅ Rotera tokens regelbundet| `http://localhost:3000/setup.html` | Konfigurationsguide |#### Auktorisera Spotify---
+
+
+
+---| `http://localhost:3000/uppdaterapris` | Uppdatera belöning |
+
+
+
+## 📄 Licens
+
+
+
+Detta projekt är licensierat under MIT-licensen.---
+
+
+
+---1. Starta servern: `npm run dev`---
+
+
+
+## 🙏 Tack till## 💬 Botkommandon
+
+
+
+- **Spotify Web API** - Låtdata och uppspelning2. Öppna: `http://localhost:3000/spotify/login`
+
+- **Twitch API** - Kanalpoäng och chatt
+
+- **tmi.js** - Twitch-chattbibliotek### För Moderatorer
+
+- **OBS Studio** - Streamingintegration
 
 3. Logga in och godkänn
 
+---
+
 | Kommando | Beskrivning | Exempel |
+
+<div align="center">
 
 |----------|-------------|---------|4. Tokens sparas automatiskt
 
+**Gjord med ❤️ för Twitch-communityn**
+
 | `!sr <låt>` | Köa låt gratis | `!sr Sandstorm av Darude` |
+
+*Lycka till med streamingen! 🎮🎵*
 
 | `!srapprove` | Godkänn nästa i kön | `!srapprove` |## 📥 Installation
 
+⭐ **Om du gillar projektet, ge det en stjärna!** ⭐
+
 | `!srdeny <text>` | Neka och återbetala | `!srdeny För lång låt` |
+
+</div>
 
 | `!srclear` | Rensa hela kön | `!srclear` |---
 
