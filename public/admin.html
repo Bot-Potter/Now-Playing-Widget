@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Panel</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #0f0f0f;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      padding: 20px 30px;
+      border-bottom: 2px solid #2a2a3e;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+    }
+
+    .header h1 {
+      font-size: 28px;
+      color: #fff;
+      margin-bottom: 5px;
+    }
+
+    .header .subtitle {
+      color: #aaa;
+      font-size: 14px;
+    }
+
+    .container {
+      display: grid;
+      grid-template-columns: 1fr 2fr;
+      gap: 20px;
+      padding: 20px;
+      height: calc(100vh - 90px);
+    }
+
+    .panel {
+      background: #1a1a1a;
+      border-radius: 12px;
+      border: 1px solid #2a2a2a;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-header {
+      background: #252525;
+      padding: 15px 20px;
+      border-bottom: 1px solid #2a2a2a;
+      font-weight: 600;
+      font-size: 16px;
+      color: #fff;
+    }
+
+    .panel-content {
+      padding: 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .auth-section {
+      margin-bottom: 20px;
+      padding: 15px;
+      border-radius: 8px;
+      background: #252525;
+      border: 1px solid #333;
+    }
+
+    .auth-section h3 {
+      font-size: 16px;
+      margin-bottom: 10px;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .auth-section p {
+      color: #999;
+      font-size: 13px;
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 10px 20px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 13px;
+      transition: all 0.2s ease;
+      border: none;
+      cursor: pointer;
+      width: 100%;
+      text-align: center;
+    }
+
+    .btn-spotify {
+      background: #1DB954;
+      color: white;
+    }
+
+    .btn-spotify:hover {
+      background: #1ed760;
+    }
+
+    .btn-twitch {
+      background: #9146FF;
+      color: white;
+    }
+
+    .btn-twitch:hover {
+      background: #772ce8;
+    }
+
+    .logs-container {
+      flex: 1;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .log-entry {
+      padding: 8px 12px;
+      border-bottom: 1px solid #252525;
+      display: flex;
+      gap: 12px;
+      transition: background 0.1s ease;
+    }
+
+    .log-entry:hover {
+      background: #202020;
+    }
+
+    .log-timestamp {
+      color: #666;
+      flex-shrink: 0;
+      font-size: 12px;
+    }
+
+    .log-level {
+      flex-shrink: 0;
+      font-weight: 600;
+      width: 50px;
+      text-transform: uppercase;
+      font-size: 11px;
+    }
+
+    .log-level.log { color: #4a9eff; }
+    .log-level.info { color: #4a9eff; }
+    .log-level.warn { color: #ffa94a; }
+    .log-level.error { color: #ff4a4a; }
+
+    .log-message {
+      flex: 1;
+      word-break: break-word;
+      color: #e0e0e0;
+    }
+
+    .controls {
+      padding: 15px 20px;
+      background: #252525;
+      border-top: 1px solid #2a2a2a;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .controls button {
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: 1px solid #444;
+      background: #333;
+      color: #fff;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.2s ease;
+    }
+
+    .controls button:hover {
+      background: #444;
+      border-color: #555;
+    }
+
+    .status {
+      margin-left: auto;
+      font-size: 12px;
+      color: #666;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #666;
+    }
+
+    .status-dot.connected {
+      background: #1DB954;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .filter-buttons {
+      display: flex;
+      gap: 5px;
+    }
+
+    .filter-btn {
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      background: #2a2a2a;
+      color: #999;
+      cursor: pointer;
+      font-size: 11px;
+      transition: all 0.2s ease;
+    }
+
+    .filter-btn.active {
+      background: #4a9eff;
+      border-color: #4a9eff;
+      color: #fff;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #666;
+    }
+
+    .empty-state svg {
+      width: 64px;
+      height: 64px;
+      margin-bottom: 16px;
+      opacity: 0.3;
+    }
+
+    @media (max-width: 1024px) {
+      .container {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🎛️ Admin Panel</h1>
+    <p class="subtitle">Manage authentication and monitor server logs in real-time</p>
+  </div>
+
+  <div class="container">
+    <div class="panel">
+      <div class="panel-header">Authentication</div>
+      <div class="panel-content">
+        <div class="auth-section">
+          <h3>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="#1DB954">
+              <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
+            </svg>
+            Spotify
+          </h3>
+          <p>Connect your Spotify account to get the REFRESH_TOKEN needed for playing music and managing song requests.</p>
+          <a href="/auth/spotify" class="btn btn-spotify">Connect Spotify</a>
+        </div>
+
+        <div class="auth-section">
+          <h3>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="#9146FF">
+              <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z"/>
+            </svg>
+            Twitch
+          </h3>
+          <p>Connect your Twitch account to get the tokens needed for chat bot functionality and channel points integration.</p>
+          <a href="/auth/twitch" class="btn btn-twitch">Connect Twitch</a>
+        </div>
+
+        <div style="margin-top: 20px; padding: 15px; background: #252525; border-radius: 8px; border: 1px solid #333;">
+          <p style="color: #999; font-size: 12px; line-height: 1.5;">
+            <strong style="color: #fff;">Note:</strong> After connecting, add the tokens to your .env file and restart the server and bot for changes to take effect.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">Live Server Logs</div>
+      <div class="controls">
+        <button onclick="clearLogs()">Clear Logs</button>
+        <button onclick="toggleAutoScroll()">
+          <span id="autoScrollText">Auto-scroll: ON</span>
+        </button>
+        <div class="filter-buttons">
+          <button class="filter-btn active" data-level="all" onclick="filterLogs('all')">All</button>
+          <button class="filter-btn" data-level="log" onclick="filterLogs('log')">Log</button>
+          <button class="filter-btn" data-level="info" onclick="filterLogs('info')">Info</button>
+          <button class="filter-btn" data-level="warn" onclick="filterLogs('warn')">Warn</button>
+          <button class="filter-btn" data-level="error" onclick="filterLogs('error')">Error</button>
+        </div>
+        <div class="status">
+          <div class="status-dot" id="statusDot"></div>
+          <span id="statusText">Connecting...</span>
+        </div>
+      </div>
+      <div class="logs-container" id="logsContainer">
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          <p>Waiting for logs...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let ws = null;
+    let autoScroll = true;
+    let currentFilter = 'all';
+    let allLogs = [];
+
+    function connectWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${window.location.host}/ws/logs`);
+
+      ws.onopen = () => {
+        console.log('[admin] Connected to log stream');
+        updateStatus(true);
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.type === 'init') {
+          allLogs = data.logs || [];
+          renderLogs();
+        } else if (data.type === 'log') {
+          allLogs.push(data.log);
+          if (allLogs.length > 1000) {
+            allLogs.shift();
+          }
+          if (currentFilter === 'all' || currentFilter === data.log.level) {
+            appendLog(data.log);
+          }
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('[admin] Disconnected from log stream');
+        updateStatus(false);
+        setTimeout(connectWebSocket, 3000);
+      };
+
+      ws.onerror = (error) => {
+        console.error('[admin] WebSocket error:', error);
+      };
+    }
+
+    function updateStatus(connected) {
+      const dot = document.getElementById('statusDot');
+      const text = document.getElementById('statusText');
+
+      if (connected) {
+        dot.classList.add('connected');
+        text.textContent = 'Connected';
+      } else {
+        dot.classList.remove('connected');
+        text.textContent = 'Disconnected';
+      }
+    }
+
+    function appendLog(log) {
+      const container = document.getElementById('logsContainer');
+      const emptyState = container.querySelector('.empty-state');
+      if (emptyState) {
+        emptyState.remove();
+      }
+
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+
+      const time = new Date(log.timestamp).toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+
+      entry.innerHTML = `
+        <div class="log-timestamp">${time}</div>
+        <div class="log-level ${log.level}">${log.level}</div>
+        <div class="log-message">${escapeHtml(log.message)}</div>
+      `;
+
+      container.appendChild(entry);
+
+      if (autoScroll) {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+
+    function renderLogs() {
+      const container = document.getElementById('logsContainer');
+      container.innerHTML = '';
+
+      const filtered = currentFilter === 'all'
+        ? allLogs
+        : allLogs.filter(log => log.level === currentFilter);
+
+      if (filtered.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <p>No logs to display</p>
+          </div>
+        `;
+        return;
+      }
+
+      filtered.forEach(log => appendLog(log));
+    }
+
+    function clearLogs() {
+      allLogs = [];
+      renderLogs();
+    }
+
+    function toggleAutoScroll() {
+      autoScroll = !autoScroll;
+      document.getElementById('autoScrollText').textContent = `Auto-scroll: ${autoScroll ? 'ON' : 'OFF'}`;
+    }
+
+    function filterLogs(level) {
+      currentFilter = level;
+
+      document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.classList.remove('active');
+      });
+      document.querySelector(`[data-level="${level}"]`).classList.add('active');
+
+      renderLogs();
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    connectWebSocket();
+  </script>
+</body>
+</html>

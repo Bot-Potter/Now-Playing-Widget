@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Initial Setup</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      padding: 40px 20px;
+      color: #e0e0e0;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    .header h1 {
+      font-size: 36px;
+      color: #fff;
+      margin-bottom: 10px;
+    }
+
+    .header p {
+      color: #aaa;
+      font-size: 16px;
+    }
+
+    .card {
+      background: #1a1a1a;
+      border-radius: 12px;
+      border: 1px solid #2a2a2a;
+      padding: 30px;
+      margin-bottom: 20px;
+    }
+
+    .card h2 {
+      font-size: 20px;
+      color: #fff;
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 2px solid #2a2a2a;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .form-group.full-width {
+      grid-column: 1 / -1;
+    }
+
+    label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #ccc;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .label-hint {
+      font-weight: 400;
+      color: #666;
+      font-size: 11px;
+    }
+
+    input, textarea {
+      padding: 12px 14px;
+      background: #252525;
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 14px;
+      font-family: inherit;
+      transition: all 0.2s ease;
+    }
+
+    input:focus, textarea:focus {
+      outline: none;
+      border-color: #4a9eff;
+      background: #2a2a2a;
+    }
+
+    input::placeholder, textarea::placeholder {
+      color: #666;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 80px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+    }
+
+    .btn {
+      padding: 14px 28px;
+      border-radius: 8px;
+      border: none;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #4a9eff 0%, #3b82f6 100%);
+      color: white;
+      width: 100%;
+      margin-top: 10px;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(74, 158, 255, 0.4);
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .message {
+      padding: 14px 18px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 14px;
+      display: none;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .message.success {
+      background: rgba(29, 185, 84, 0.1);
+      border: 1px solid #1DB954;
+      color: #1DB954;
+      display: flex;
+    }
+
+    .message.error {
+      background: rgba(255, 74, 74, 0.1);
+      border: 1px solid #ff4a4a;
+      color: #ff4a4a;
+      display: flex;
+    }
+
+    .message.info {
+      background: rgba(74, 158, 255, 0.1);
+      border: 1px solid #4a9eff;
+      color: #4a9eff;
+      display: flex;
+    }
+
+    .help-text {
+      font-size: 12px;
+      color: #666;
+      line-height: 1.5;
+      margin-top: 4px;
+    }
+
+    .section-description {
+      color: #999;
+      font-size: 14px;
+      margin-bottom: 20px;
+      line-height: 1.6;
+    }
+
+    .quick-links {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .quick-link {
+      padding: 6px 12px;
+      background: #252525;
+      border: 1px solid #333;
+      border-radius: 4px;
+      color: #4a9eff;
+      text-decoration: none;
+      font-size: 12px;
+      transition: all 0.2s ease;
+    }
+
+    .quick-link:hover {
+      background: #2a2a2a;
+      border-color: #4a9eff;
+    }
+
+    .action-button {
+      padding: 12px 24px;
+      border-radius: 6px;
+      border: none;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      background: linear-gradient(135deg, #1DB954 0%, #17a048 100%);
+      color: white;
+    }
+
+    .action-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(29, 185, 84, 0.4);
+    }
+
+    .action-button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    #reward-status {
+      font-size: 14px;
+      padding: 10px;
+      border-radius: 6px;
+    }
+
+    #reward-status.success {
+      background: rgba(29, 185, 84, 0.1);
+      border: 1px solid #1DB954;
+      color: #1DB954;
+    }
+
+    #reward-status.error {
+      background: rgba(255, 74, 74, 0.1);
+      border: 1px solid #ff4a4a;
+      color: #ff4a4a;
+    }
+
+    @media (max-width: 768px) {
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>⚙️ Initial Setup</h1>
+      <p>Configure your application settings and API credentials</p>
+    </div>
+
+    <div id="messageBox" class="message"></div>
+
+    <form id="setupForm">
+      <div class="card">
+        <h2>Server Configuration</h2>
+        <p class="section-description">Basic server settings and security configuration.</p>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>
+              Admin Secret
+              <span class="label-hint">(for authentication)</span>
+            </label>
+            <input type="text" name="ADMIN_SECRET" placeholder="your-secret-key" required>
+            <span class="help-text">Used to secure admin endpoints</span>
+          </div>
+
+          <div class="form-group">
+            <label>
+              Session Secret
+              <span class="label-hint">(for sessions)</span>
+            </label>
+            <input type="text" name="SESSION_SECRET" placeholder="random-session-secret" required>
+            <span class="help-text">Used for session encryption</span>
+          </div>
+
+          <div class="form-group">
+            <label>Server Port</label>
+            <input type="number" name="PORT" value="3000" required>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Spotify Configuration</h2>
+        <p class="section-description">Connect to Spotify API for music playback and song requests.</p>
+        <div class="quick-links">
+          <a href="https://developer.spotify.com/dashboard" target="_blank" class="quick-link">Open Spotify Dashboard →</a>
+          <a href="/auth/spotify" target="_blank" class="quick-link">Get Refresh Token →</a>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Client ID</label>
+            <input type="text" name="SPOTIFY_CLIENT_ID" placeholder="your-client-id" required>
+          </div>
+
+          <div class="form-group">
+            <label>Client Secret</label>
+            <input type="password" name="SPOTIFY_CLIENT_SECRET" placeholder="your-client-secret" required>
+          </div>
+
+          <div class="form-group full-width">
+            <label>Redirect URI</label>
+            <input type="url" name="SPOTIFY_REDIRECT_URI" placeholder="http://localhost:3000/spotify/callback" required>
+            <span class="help-text">
+              <strong>Callback URL:</strong> /spotify/callback<br>
+              <strong>Local:</strong> http://localhost:3000/spotify/callback<br>
+              <strong>Production:</strong> https://yourdomain.com/spotify/callback<br>
+              Must match the redirect URI in your Spotify app settings
+            </span>
+          </div>
+
+          <div class="form-group full-width">
+            <label>Refresh Token</label>
+            <input type="text" name="REFRESH_TOKEN" placeholder="AQArxCsJevQpU0...">
+            <span class="help-text">Get this by authenticating with Spotify (use the link above)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Twitch App Configuration</h2>
+        <p class="section-description">Basic Twitch application settings.</p>
+        <div class="quick-links">
+          <a href="https://dev.twitch.tv/console/apps" target="_blank" class="quick-link">Open Twitch Console →</a>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Client ID</label>
+            <input type="text" name="TWITCH_CLIENT_ID" placeholder="your-client-id" required>
+            <span class="help-text">From your Twitch application</span>
+          </div>
+
+          <div class="form-group">
+            <label>Client Secret</label>
+            <input type="password" name="TWITCH_CLIENT_SECRET" placeholder="your-client-secret" required>
+            <span class="help-text">From your Twitch application</span>
+          </div>
+
+          <div class="form-group">
+            <label>Channel Name</label>
+            <input type="text" name="TWITCH_CHANNEL" placeholder="yourchannelname" required>
+            <span class="help-text">Your broadcaster channel (lowercase)</span>
+          </div>
+
+          <div class="form-group">
+            <label>Broadcaster ID</label>
+            <input type="text" name="TWITCH_BROADCASTER_ID" placeholder="123456789">
+            <span class="help-text">Your channel's user ID</span>
+          </div>
+
+          <div class="form-group full-width">
+            <label>Redirect URI</label>
+            <input type="url" name="TWITCH_REDIRECT_URI" placeholder="http://localhost:3000/twitch/callback" required>
+            <span class="help-text">
+              <strong>Callback URL:</strong> /twitch/callback<br>
+              <strong>Local:</strong> http://localhost:3000/twitch/callback<br>
+              <strong>Production:</strong> https://yourdomain.com/twitch/callback<br>
+              Must match your Twitch app redirect URI
+            </span>
+          </div>
+
+          <div class="form-group full-width">
+            <label>Song Reward ID</label>
+            <input type="text" name="TWITCH_SONG_REWARD_ID" id="reward-id-input" placeholder="reward-id-here">
+            <span class="help-text">Channel points reward ID for song requests (can be filled manually or created below)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Create Song Request Reward</h2>
+        <p class="section-description">Create or update your Twitch channel points reward for song requests. If you already have a reward ID above, these fields are optional.</p>
+        <div class="form-grid">
+          <div class="form-group full-width">
+            <label>Reward Title</label>
+            <input type="text" id="reward-title" placeholder="e.g., Song Request">
+            <span class="help-text">The name viewers will see for the reward</span>
+          </div>
+
+          <div class="form-group">
+            <label>Cost (Channel Points)</label>
+            <input type="number" id="reward-cost" placeholder="e.g., 1000" min="1">
+            <span class="help-text">How many points to redeem</span>
+          </div>
+
+          <div class="form-group full-width">
+            <label>Prompt / Description</label>
+            <textarea id="reward-prompt" placeholder="e.g., Request a song by entering the song name or Spotify URL" rows="3"></textarea>
+            <span class="help-text">Instructions for viewers when redeeming</span>
+          </div>
+
+          <div class="form-group full-width">
+            <button type="button" id="create-reward-btn" class="action-button">Create Reward</button>
+            <button type="button" id="update-reward-btn" class="action-button" style="display: none; background: #f39c12;">Update Reward</button>
+            <div id="reward-status" style="margin-top: 10px;"></div>
+          </div>
+
+          <div class="form-group">
+            <label>Reply on Command</label>
+            <select name="TWITCH_REPLY_ON_COMMAND">
+              <option value="true">Yes</option>
+              <option value="false">No</option>
+            </select>
+            <span class="help-text">Bot replies in chat</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Twitch Bot Account</h2>
+        <p class="section-description">Separate bot account that will be active in chat. This should be a different Twitch account from your broadcaster account.</p>
+        <div class="quick-links">
+          <a href="https://twitchapps.com/tmi/" target="_blank" class="quick-link">Get Bot OAuth Token →</a>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Bot Username</label>
+            <input type="text" name="TWITCH_USERNAME" placeholder="yourbotname" required>
+            <span class="help-text">Your bot account username (e.g., maccanzzbot)</span>
+          </div>
+
+          <div class="form-group full-width">
+            <label>Bot OAuth Token</label>
+            <input type="text" name="TWITCH_OAUTH_TOKEN" placeholder="oauth:yourtoken" required>
+            <span class="help-text">OAuth token for the bot account (use link above while logged in as bot)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Twitch Broadcaster Tokens</h2>
+        <p class="section-description">These tokens are for your main broadcaster account to manage channel points redemptions.</p>
+        <div class="quick-links">
+          <a href="/auth/twitch" target="_blank" class="quick-link">Get Broadcaster Tokens →</a>
+        </div>
+        <div class="form-grid">
+          <div class="form-group full-width">
+            <label>Redemptions Access Token</label>
+            <input type="text" name="TWITCH_REDEMPTIONS_TOKEN" placeholder="access-token">
+            <span class="help-text">Access token for managing channel points (broadcaster account)</span>
+          </div>
+
+          <div class="form-group full-width">
+            <label>Redemptions Refresh Token</label>
+            <input type="text" name="TWITCH_REDEMPTIONS_REFRESH_TOKEN" placeholder="refresh-token">
+            <span class="help-text">Refresh token for auto-renewal (broadcaster account)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Song Request Settings</h2>
+        <p class="section-description">Configure song request approval settings.</p>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Auto-Approve Delay (ms)</label>
+            <input type="number" name="SR_APPROVE_ALL_DELAY_MS" value="2000" required>
+            <span class="help-text">Delay before auto-approving song requests</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Supabase Configuration</h2>
+        <p class="section-description">Database configuration (usually pre-configured).</p>
+        <div class="form-grid">
+          <div class="form-group full-width">
+            <label>Supabase URL</label>
+            <input type="url" name="VITE_SUPABASE_URL" placeholder="https://your-project.supabase.co">
+          </div>
+
+          <div class="form-group full-width">
+            <label>Supabase Anon Key</label>
+            <textarea name="VITE_SUPABASE_ANON_KEY" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="btn btn-primary" id="saveBtn">
+          Save Configuration & Restart Server
+        </button>
+        <button type="button" class="btn btn-primary" id="restartBtn" style="margin-left: 12px; background-color: #ff6b6b;">
+          Restart Server
+        </button>
+        <p style="margin-top: 12px; text-align: center; font-size: 14px; color: #666;">
+          or <a href="#" id="downloadEnvBtn" style="color: #9147ff; text-decoration: underline; cursor: pointer;">download .env file locally</a> if save doesn't work
+        </p>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    const form = document.getElementById('setupForm');
+    const messageBox = document.getElementById('messageBox');
+    const saveBtn = document.getElementById('saveBtn');
+    const restartBtn = document.getElementById('restartBtn');
+
+    async function loadCurrentConfig() {
+      try {
+        const response = await fetch('/api/config');
+        if (response.ok) {
+          const data = await response.json();
+
+          Object.keys(data.config).forEach(key => {
+            const input = form.querySelector(`[name="${key}"]`);
+            if (input && data.config[key]) {
+              input.value = data.config[key];
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Failed to load config:', error);
+      }
+    }
+
+    function showMessage(text, type = 'info') {
+      messageBox.textContent = text;
+      messageBox.className = `message ${type}`;
+      messageBox.style.display = 'flex';
+
+      if (type === 'success') {
+        setTimeout(() => {
+          messageBox.style.display = 'none';
+        }, 5000);
+      }
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+
+      const formData = new FormData(form);
+      const config = {};
+
+      for (let [key, value] of formData.entries()) {
+        if (value.trim()) {
+          config[key] = value;
+        }
+      }
+
+      try {
+        console.log('Sending config:', config);
+        const response = await fetch('/api/config', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ config })
+        });
+
+        console.log('Response status:', response.status);
+        const data = await response.json();
+        console.log('Response data:', data);
+
+        if (response.ok) {
+          showMessage(data.message || 'Configuration saved successfully!', 'success');
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save Configuration & Restart Server';
+        } else {
+          showMessage(data.message || 'Failed to save configuration', 'error');
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save Configuration & Restart Server';
+        }
+      } catch (error) {
+        console.error('Save error:', error);
+        showMessage('Error saving configuration: ' + error.message, 'error');
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Configuration & Restart Server';
+      }
+    });
+
+    loadCurrentConfig();
+
+    // Restart server functionality
+    restartBtn.addEventListener('click', async () => {
+      restartBtn.disabled = true;
+      restartBtn.textContent = 'Restarting...';
+
+      try {
+        const response = await fetch('/api/restart', {
+          method: 'POST',
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          showMessage(data.message || 'Server is restarting...', 'success');
+        } else {
+          showMessage(data.message || 'Failed to restart server', 'error');
+          restartBtn.disabled = false;
+          restartBtn.textContent = 'Restart Server';
+        }
+      } catch (error) {
+        console.error('Restart error:', error);
+        showMessage('Server is restarting...', 'success');
+      }
+    });
+
+    // Download .env file functionality
+    const downloadEnvBtn = document.getElementById('downloadEnvBtn');
+    downloadEnvBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+
+      const formData = new FormData(form);
+      const config = {};
+
+      for (let [key, value] of formData.entries()) {
+        if (value.trim()) {
+          config[key] = value;
+        }
+      }
+
+      // Build .env content
+      let envContent = '# Configuration File\n';
+      envContent += '# Generated from setup page\n\n';
+
+      // Add each config entry
+      Object.entries(config).forEach(([key, value]) => {
+        envContent += `${key}=${value}\n`;
+      });
+
+      // Create blob and download
+      const blob = new Blob([envContent], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = '.env';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      showMessage('.env file downloaded! Upload it to your server and restart.', 'success');
+    });
+
+    const createRewardBtn = document.getElementById('create-reward-btn');
+    const updateRewardBtn = document.getElementById('update-reward-btn');
+    const rewardStatus = document.getElementById('reward-status');
+    const rewardIdInput = document.getElementById('reward-id-input');
+    const rewardTitle = document.getElementById('reward-title');
+    const rewardCost = document.getElementById('reward-cost');
+    const rewardPrompt = document.getElementById('reward-prompt');
+
+    function showRewardStatus(message, isSuccess) {
+      rewardStatus.textContent = message;
+      rewardStatus.className = isSuccess ? 'success' : 'error';
+      rewardStatus.style.display = 'block';
+    }
+
+    createRewardBtn.addEventListener('click', async () => {
+      const title = rewardTitle.value.trim();
+      const cost = rewardCost.value.trim();
+      const prompt = rewardPrompt.value.trim();
+
+      if (!title || !cost) {
+        showRewardStatus('Please fill in the reward title and cost!', false);
+        return;
+      }
+
+      createRewardBtn.disabled = true;
+      createRewardBtn.textContent = 'Creating...';
+
+      try {
+        const response = await fetch('/twitch/create-reward', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ title, cost, prompt })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          showRewardStatus(`Reward created successfully! ID: ${data.rewardId}`, true);
+          rewardIdInput.value = data.rewardId;
+
+          createRewardBtn.style.display = 'none';
+          updateRewardBtn.style.display = 'block';
+          updateRewardBtn.dataset.rewardId = data.rewardId;
+        } else {
+          showRewardStatus(data.error || 'Failed to create reward', false);
+        }
+      } catch (error) {
+        showRewardStatus('Error: ' + error.message, false);
+      } finally {
+        createRewardBtn.disabled = false;
+        createRewardBtn.textContent = 'Create Reward';
+      }
+    });
+
+    updateRewardBtn.addEventListener('click', async () => {
+      const rewardId = updateRewardBtn.dataset.rewardId || rewardIdInput.value;
+      const title = rewardTitle.value.trim();
+      const cost = rewardCost.value.trim();
+      const prompt = rewardPrompt.value.trim();
+
+      if (!rewardId) {
+        showRewardStatus('No reward ID found!', false);
+        return;
+      }
+
+      if (!title || !cost) {
+        showRewardStatus('Please fill in the reward title and cost!', false);
+        return;
+      }
+
+      updateRewardBtn.disabled = true;
+      updateRewardBtn.textContent = 'Updating...';
+
+      try {
+        const response = await fetch(`/twitch/update-reward/${rewardId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ title, cost, prompt })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          showRewardStatus('Reward updated successfully!', true);
+        } else {
+          showRewardStatus(data.error || 'Failed to update reward', false);
+        }
+      } catch (error) {
+        showRewardStatus('Error: ' + error.message, false);
+      } finally {
+        updateRewardBtn.disabled = false;
+        updateRewardBtn.textContent = 'Update Reward';
+      }
+    });
+
+    if (rewardIdInput.value) {
+      createRewardBtn.style.display = 'none';
+      updateRewardBtn.style.display = 'block';
+      updateRewardBtn.dataset.rewardId = rewardIdInput.value;
+    }
+  </script>
+</body>
+</html>

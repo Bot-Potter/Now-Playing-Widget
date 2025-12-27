@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Uppdatera Kanalpoäng - Song Request</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .container {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      max-width: 600px;
+      width: 100%;
+      padding: 40px;
+    }
+
+    h1 {
+      color: #333;
+      margin-bottom: 10px;
+      font-size: 28px;
+      text-align: center;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #666;
+      margin-bottom: 30px;
+      font-size: 14px;
+    }
+
+    .form-group {
+      margin-bottom: 25px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #333;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    input, textarea {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 15px;
+      font-family: inherit;
+      transition: border-color 0.2s;
+    }
+
+    input:focus, textarea:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 100px;
+    }
+
+    .help-text {
+      font-size: 12px;
+      color: #666;
+      margin-top: 5px;
+    }
+
+    .current-info {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 30px;
+    }
+
+    .current-info h3 {
+      color: #333;
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+
+    .current-info .info-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #e0e0e0;
+    }
+
+    .current-info .info-row:last-child {
+      border-bottom: none;
+    }
+
+    .current-info .label {
+      color: #666;
+      font-weight: 600;
+      font-size: 13px;
+    }
+
+    .current-info .value {
+      color: #333;
+      font-size: 13px;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 12px;
+      margin-top: 30px;
+    }
+
+    button {
+      flex: 1;
+      padding: 14px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    button.primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    button.primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+    }
+
+    button.primary:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    button.secondary {
+      background: #f5f5f5;
+      color: #333;
+    }
+
+    button.secondary:hover {
+      background: #e0e0e0;
+    }
+
+    .message {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 8px;
+      font-size: 14px;
+      display: none;
+    }
+
+    .message.success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+      display: block;
+    }
+
+    .message.error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+      display: block;
+    }
+
+    .loading {
+      text-align: center;
+      color: #666;
+      padding: 40px;
+    }
+
+    .spinner {
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #667eea;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 15px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .back-link {
+      text-align: center;
+      margin-top: 20px;
+    }
+
+    .back-link a {
+      color: #667eea;
+      text-decoration: none;
+      font-size: 14px;
+    }
+
+    .back-link a:hover {
+      text-decoration: underline;
+    }
+
+    .warning {
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      color: #856404;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎵 Uppdatera Kanalpoäng</h1>
+    <p class="subtitle">Ändra pris, titel och beskrivning för Song Request</p>
+
+    <div id="loadingSection" class="loading">
+      <div class="spinner"></div>
+      <p>Hämtar nuvarande inställningar...</p>
+    </div>
+
+    <div id="contentSection" style="display: none;">
+      <div class="current-info" id="currentInfo">
+        <h3>📊 Nuvarande inställningar</h3>
+        <div class="info-row">
+          <span class="label">Titel:</span>
+          <span class="value" id="currentTitle">-</span>
+        </div>
+        <div class="info-row">
+          <span class="label">Pris:</span>
+          <span class="value" id="currentCost">-</span>
+        </div>
+        <div class="info-row">
+          <span class="label">Beskrivning:</span>
+          <span class="value" id="currentPrompt">-</span>
+        </div>
+      </div>
+
+      <div class="warning">
+        ⚠️ <strong>OBS:</strong> Ändringar träder i kraft direkt på din Twitch-kanal när du sparar.
+      </div>
+
+      <form id="updateForm">
+        <div class="form-group">
+          <label for="title">Titel</label>
+          <input 
+            type="text" 
+            id="title" 
+            name="title" 
+            placeholder="Song Request"
+            required
+          >
+          <p class="help-text">Namnet som visas för tittarna i kanalpoäng-menyn</p>
+        </div>
+
+        <div class="form-group">
+          <label for="cost">Pris (kanalpoäng)</label>
+          <input 
+            type="number" 
+            id="cost" 
+            name="cost" 
+            min="1"
+            placeholder="1000"
+            required
+          >
+          <p class="help-text">Hur många kanalpoäng det kostar att önska en låt</p>
+        </div>
+
+        <div class="form-group">
+          <label for="prompt">Beskrivning</label>
+          <textarea 
+            id="prompt" 
+            name="prompt" 
+            placeholder="Skriv in låtnamn och artist, eller klistra in Spotify-länk"
+          ></textarea>
+          <p class="help-text">Instruktioner som tittarna ser när de ska lösa in belöningen</p>
+        </div>
+
+        <div class="button-group">
+          <button type="button" class="secondary" onclick="loadCurrentSettings()">🔄 Återställ</button>
+          <button type="submit" class="primary" id="saveBtn">💾 Spara ändringar</button>
+        </div>
+      </form>
+
+      <div id="message" class="message"></div>
+    </div>
+
+    <div class="back-link">
+      <a href="/admin.html">← Tillbaka till Admin</a>
+    </div>
+  </div>
+
+  <script>
+    let rewardId = null;
+    let originalSettings = null;
+
+    // Ladda nuvarande inställningar när sidan laddas
+    async function loadCurrentSettings() {
+      const loadingSection = document.getElementById('loadingSection');
+      const contentSection = document.getElementById('contentSection');
+      const messageDiv = document.getElementById('message');
+
+      try {
+        loadingSection.style.display = 'block';
+        contentSection.style.display = 'none';
+        messageDiv.style.display = 'none';
+
+        // Hämta reward ID från env (via ett endpoint som returnerar det)
+        const envResponse = await fetch('/api/env');
+        const envData = await envResponse.json();
+        rewardId = envData.TWITCH_SONG_REWARD_ID;
+
+        if (!rewardId) {
+          throw new Error('TWITCH_SONG_REWARD_ID är inte konfigurerat. Gå till setup-sidan först.');
+        }
+
+        // Hämta reward-information från Twitch
+        const response = await fetch(`/twitch/reward/${rewardId}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Kunde inte hämta reward-information');
+        }
+
+        const reward = data.reward;
+        originalSettings = {
+          title: reward.title,
+          cost: reward.cost,
+          prompt: reward.prompt || ''
+        };
+
+        // Uppdatera UI
+        document.getElementById('currentTitle').textContent = reward.title;
+        document.getElementById('currentCost').textContent = `${reward.cost} poäng`;
+        document.getElementById('currentPrompt').textContent = reward.prompt || '(ingen beskrivning)';
+
+        document.getElementById('title').value = reward.title;
+        document.getElementById('cost').value = reward.cost;
+        document.getElementById('prompt').value = reward.prompt || '';
+
+        loadingSection.style.display = 'none';
+        contentSection.style.display = 'block';
+      } catch (error) {
+        loadingSection.style.display = 'none';
+        contentSection.style.display = 'block';
+        showMessage(error.message, 'error');
+      }
+    }
+
+    // Hantera formulär-submit
+    document.getElementById('updateForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const saveBtn = document.getElementById('saveBtn');
+      const messageDiv = document.getElementById('message');
+      
+      const formData = {
+        title: document.getElementById('title').value,
+        cost: parseInt(document.getElementById('cost').value),
+        prompt: document.getElementById('prompt').value
+      };
+
+      try {
+        saveBtn.disabled = true;
+        saveBtn.textContent = '💾 Sparar...';
+        messageDiv.style.display = 'none';
+
+        const response = await fetch(`/twitch/update-reward/${rewardId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(formData)
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Kunde inte uppdatera reward');
+        }
+
+        // Uppdatera "nuvarande inställningar" sektion
+        document.getElementById('currentTitle').textContent = formData.title;
+        document.getElementById('currentCost').textContent = `${formData.cost} poäng`;
+        document.getElementById('currentPrompt').textContent = formData.prompt || '(ingen beskrivning)';
+
+        showMessage('✅ Inställningar uppdaterade! Ändringarna är nu aktiva på din Twitch-kanal.', 'success');
+      } catch (error) {
+        showMessage(`❌ Fel: ${error.message}`, 'error');
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '💾 Spara ändringar';
+      }
+    });
+
+    function showMessage(text, type) {
+      const messageDiv = document.getElementById('message');
+      messageDiv.textContent = text;
+      messageDiv.className = `message ${type}`;
+      messageDiv.style.display = 'block';
+
+      // Scrolla till meddelandet
+      messageDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // Ladda inställningar när sidan laddas
+    loadCurrentSettings();
+  </script>
+</body>
+</html>

@@ -1,17 +1,19 @@
 {
-  "name": "spotify-now-playing",
+  "name": "twitch-song-request-system",
+  "private": true,
   "version": "1.0.0",
   "type": "module",
-  "main": "server.js",
   "scripts": {
-    "start": "node server.js & node sr-bot.js"
+    "dev": "node server/index.js",
+    "bot": "node src/sr-bot.js",
+    "start": "npm run dev"
   },
   "dependencies": {
-    "abort-controller": "^3.0.0",
-    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.18.2",
     "node-fetch": "^3.3.2",
-    "tmi.js": "^1.8.5"
+    "tmi.js": "^1.8.5",
+    "ws": "^8.18.3"
   }
 }

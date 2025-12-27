@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Nu spelas</title>
+<style>
+  :root{ --accent:#f0f0f0; --text:#f6e9f5; --muted:#e9d3f2; --bar-bg:rgba(255,255,255,.16); --radius:18px; }
+  *{box-sizing:border-box} html,body{height:100%}
+  body{margin:0;background:#0b0710;display:grid;place-items:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter;color:var(--text)}
+  .wrap{width:min(760px,94vw)}
+
+  .card{position:relative;width:100%;padding:18px 22px 20px;border-radius:var(--radius);
+    overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);isolation:isolate;cursor:pointer;text-decoration:none;color:inherit;display:block}
+  .bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(26px) saturate(130%) brightness(70%);transform:scale(1.12);z-index:-2}
+  .card::after{content:"";position:absolute;inset:0;background:linear-gradient(120deg,rgba(18,8,22,.70),rgba(35,10,35,.42));z-index:-1}
+
+  .row{display:flex;align-items:center;gap:18px}
+  .cover{width:110px;height:110px;flex:0 0 auto;border-radius:50%;padding:5px;
+    background:radial-gradient(closest-side, color-mix(in oklab, var(--accent) 40%, transparent), transparent 68%), var(--accent)}
+  .cover img{width:100%;height:100%;display:block;border-radius:50%;object-fit:cover;border:4px solid rgba(255,255,255,.12)}
+
+  .meta{flex:1;min-width:0}
+  .title{margin:0;font-weight:800;letter-spacing:.2px;font-size:22px;line-height:1.2;text-shadow:0 2px 8px rgba(0,0,0,.35)}
+  .artist{margin:.25rem 0 0;color:var(--muted);font-weight:600;opacity:.95}
+
+  .times{margin:.9rem 0 .35rem;display:flex;justify-content:space-between;font-variant-numeric:tabular-nums;font-weight:700;color:var(--muted)}
+  .times .right{color:var(--accent)}
+  .progress{height:8px;border-radius:999px;position:relative;overflow:hidden;background:var(--bar-bg)}
+  .bar{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg, color-mix(in oklab, var(--accent) 95%, white 0%), color-mix(in oklab, var(--accent) 70%, white 20%))}
+
+  .empty{text-align:center;padding:28px 22px;color:#e0cade;opacity:.85}
+
+  .recent{margin-top:14px;display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:12px;width:100%}
+  .chip{width:100%;display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.10);text-decoration:none;color:var(--text);min-width:0;min-height:64px}
+  .chip:hover{border-color: color-mix(in oklab, var(--accent) 40%, white 0%)}
+  .chip img{width:40px;height:40px;border-radius:8px;object-fit:cover;flex:0 0 auto;background:#222}
+  .chip .text{min-width:0}
+  .chip .t{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip .a{font-size:12px;color:#d7c7df;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.95}
+
+  @media (max-width:560px){ .recent{grid-template-columns:repeat(2, minmax(0, 1fr))} }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <a id="cardLink" class="card" aria-live="polite" target="_blank" rel="noopener">
+      <div id="bg" class="bg"
+           style="background-image:url('https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314')"></div>
+
+      <div id="content" class="row" hidden>
+        <div class="cover"><img id="cover" alt="Omslag"
+          src="https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314"></div>
+        <div class="meta">
+          <h1 id="title" class="title">–</h1>
+          <div id="artist" class="artist">–</div>
+          <div class="times"><div id="tStart">00:00</div><div id="tEnd" class="right">00:00</div></div>
+          <div class="progress"><div id="bar" class="bar"></div></div>
+        </div>
+      </div>
+
+      <div id="empty" class="empty">Ingen låt spelas just nu.</div>
+    </a>
+
+    <div id="recent" class="recent" aria-label="Senaste låtar"></div>
+  </div>
+
+<script>
+  const API_NOW = "/now-playing";
+  const API_SNAPSHOT = "/now-snapshot";
+  const API_REC = "/recent";
+
+  const PLACEHOLDER_IMG = "https://cdn.shopify.com/s/files/1/0913/7304/4087/files/spotify-256.png?v=1757760314";
+  const DEFAULT_ACCENT = "#f0f0f0";
+
+  const el = {
+    cardLink:document.getElementById("cardLink"),
+    bg:document.getElementById("bg"), content:document.getElementById("content"), empty:document.getElementById("empty"),
+    cover:document.getElementById("cover"), title:document.getElementById("title"), artist:document.getElementById("artist"),
+    tStart:document.getElementById("tStart"), tEnd:document.getElementById("tEnd"), bar:document.getElementById("bar"),
+    recent:document.getElementById("recent")
+  };
+
+  const ms=(x=0)=>{x=Math.max(0,x|0);const s=Math.floor(x/1000),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
+  const setAccent=(c)=>document.documentElement.style.setProperty("--accent",c);
+
+  async function dominantColorFromURL(url){
+    return new Promise((resolve)=>{
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        const w=50,h=50; const c=document.createElement("canvas"); c.width=w;c.height=h;
+        const ctx=c.getContext("2d",{willReadFrequently:true});
+        ctx.drawImage(img,0,0,w,h);
+        const {data}=ctx.getImageData(0,0,w,h);
+        let r=0,g=0,b=0,count=0;
+        for(let i=0;i<data.length;i+=4){
+          if(data[i+3]<128) continue;
+          r+=data[i];g+=data[i+1];b+=data[i+2];count++;
+        }
+        if(!count) return resolve(DEFAULT_ACCENT);
+        r=Math.round(r/count);g=Math.round(g/count);b=Math.round(b/count);
+        resolve(`rgb(${r},${g},${b})`);
+      };
+      img.onerror=()=>resolve(DEFAULT_ACCENT);
+      img.src=url;
+    });
+  }
+
+  let currentTrackId = null;
+  let lastImage = PLACEHOLDER_IMG;
+  let lastAccent = DEFAULT_ACCENT;
+
+  function applyArtwork(imgUrl){
+    lastImage = imgUrl || lastImage;      // behåll senaste om ingen ny
+    el.cover.src = lastImage;
+    el.bg.style.backgroundImage = `url("${lastImage}")`;
+    if (imgUrl) {
+      dominantColorFromURL(imgUrl).then(c => { lastAccent=c; setAccent(c); });
+    } else {
+      setAccent(lastAccent);
+    }
+  }
+
+  function showEmpty(){
+    // Visa tomtext, men rör inte bild/accent
+    el.content.hidden=true; el.empty.hidden=false;
+    el.cardLink.href="#";
+    el.tStart.textContent="0:00"; el.tEnd.textContent="0:00"; el.bar.style.width="0%";
+  }
+
+  function showCardBase(d){
+    el.content.hidden=false; el.empty.hidden=true;
+    el.title.textContent=d.title||"Okänd låt";
+    el.artist.textContent=(d.artists||[]).join(", ")||d.album||"";
+    el.cardLink.href = d.url || "#";
+    const p=d.progress_ms||0,t=d.duration_ms||1;
+    el.tStart.textContent=ms(p); el.tEnd.textContent=ms(t);
+    el.bar.style.width=(100*p/Math.max(1,t))+"%";
+  }
+
+  // Ny: showPaused – använd när snapshot säger paused
+  function showPaused(){
+    // Precis som showEmpty, men vi behåller artwork/accent (inget ändras här)
+    el.content.hidden = true;
+    el.empty.hidden = true;   // Vi vill visa "Ingen låt spelas just nu" texten:
+    // OBS: Din copy säger att empty-texten ska visas vid paus.
+    // Sätt hidden = false:
+    el.empty.hidden = false;
+
+    el.cardLink.href = "#";
+    // progress/tider nollas visuellt (val: lämna kvar? jag nollar)
+    el.tStart.textContent = "0:00";
+    el.tEnd.textContent = "0:00";
+    el.bar.style.width = "0%";
+  }
+
+  async function fetchJSON(url){
+    const r = await fetch(url, { cache: "no-store", headers: { "pragma":"no-cache","cache-control":"no-cache" }});
+    return r.ok ? r.json() : null;
+  }
+
+  async function pollNow(){
+    try{
+      const now = await fetchJSON(API_NOW);
+      if (now && now.playing) {
+        if (now.id !== currentTrackId) { applyArtwork(now.image || null); currentTrackId = now.id || null; }
+        showCardBase(now);
+        return;
+      }
+      const snap = await fetchJSON(API_SNAPSHOT);
+      // Servern skickar nu playing:false, paused:true när paus
+      if (snap && snap.snapshot && snap.paused) {
+        // Säkra att artworken är rätt första gången (om ny paus från annan låt)
+        if (snap.id && snap.id !== currentTrackId) {
+          applyArtwork(snap.image || null);
+          currentTrackId = snap.id;
+        }
+        showPaused();
+        return;
+      }
+      // Inget alls
+      showEmpty();
+    }catch{}
+  }
+
+  function renderRecent(list){
+    el.recent.innerHTML="";
+    const three = (Array.isArray(list)?list:[]).slice(0,3);
+    for(const it of three){
+      const a=document.createElement("a");
+      a.className="chip"; a.href=it.url||"#"; a.target="_blank"; a.rel="noopener";
+      a.innerHTML=`
+        <img src="${it.image||PLACEHOLDER_IMG}" alt="">
+        <div class="text">
+          <div class="t">${it.title||""}</div>
+          <div class="a">${(it.artists||[]).join(", ")}</div>
+        </div>
+      `;
+      el.recent.appendChild(a);
+    }
+    for(let k=three.length;k<3;k++){
+      const ph=document.createElement("div"); ph.className="chip"; ph.style.visibility="hidden";
+      el.recent.appendChild(ph);
+    }
+  }
+
+  async function pollRecent(){
+    try{
+      const exclude = currentTrackId ? `?exclude_id=${encodeURIComponent(currentTrackId)}` : "";
+      const data = await fetchJSON(API_REC + exclude);
+      console.log('[recent] Fetched data:', data);
+      renderRecent(data?.items || []);
+    }catch(e){
+      console.error('[recent] Error:', e);
+    }
+  }
+
+  // 2 Hz
+  function startPoller(fn, periodMs=500){
+    let next = performance.now();
+    async function step(){
+      try{ await fn(); }catch{}
+      next += periodMs;
+      setTimeout(step, Math.max(0, next - performance.now()));
+    }
+    setTimeout(step, 0);
+  }
+
+  startPoller(pollNow, 500);
+  startPoller(pollRecent, 500);
+
+  /* === Transparent bakgrund via ?bg=transparent === */
+  (() => {
+    const qs = new URLSearchParams(location.search);
+    if ((qs.get("bg") || "").toLowerCase() === "transparent") {
+      document.documentElement.style.background = "transparent";
+      document.body.style.background = "transparent";
+    }
+  })();
+</script>
+</body>
+</html>
